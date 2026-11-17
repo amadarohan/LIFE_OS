@@ -1,0 +1,757 @@
+@page "/knowledge"
+@using LifeOS.Application.UseCases.Knowledge
+@inject KnowledgeService KnowledgeSvc
+@inject IDateTimeFormatter Dates
+
+<PageTitle>دانش — Life OS</PageTitle>
+
+<PageHeader Eyebrow="منابع" Title="دانش"
+            Description="یادداشت‌ها، برچسب‌ها و یادداشت‌های روزانه. جست‌وجو در حافظه انجام می‌شود چون collation پایگاه داده برای متن فارسی قابل اتکا نیست.">
+    <Actions>
+        <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+<div class="row row--wrap mb-3">
+    <button class="btn @TabClass("notes")" @onclick="@(() => SetTab("notes"))">یادداشت‌ها</button>
+    <button class="btn @TabClass("tags")" @onclick="@(() => SetTab("tags"))">برچسب‌ها</button>
+    <button class="btn @TabClass("journal")" @onclick="@(() => SetTab("journal"))">یادداشت روزانه</button>
+</div>
+
+@if (_tab == "notes")
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">یادداشت‌ها</span>
+                <span class="card__subtitle">@_notes.Count مورد</span>
+            </div>
+            <div class="card__body">
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">جست‌وجو</label>
+                        <input class="input" @bind="_searchText" @bind:after="ReloadNotesAsync" placeholder="عنوان یا متن" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">نوع</label>
+                        <select class="select" @bind="_noteTypeFilter" @bind:after="ReloadNotesAsync">
+                            <option value="">همه</option>
+                            @foreach (var t in Enum.GetValues<NoteType>())
+                            {
+                                <option value="@t">@NoteTypeLabel(t)</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <label class="checkbox">
+                    <input type="checkbox" @bind="_pinnedOnly" @bind:after="ReloadNotesAsync" />
+                    فقط سنجاق‌شده‌ها
+                </label>
+            </div>
+
+            @if (_notes.Count == 0)
+            {
+                <EmptyState Title="یادداشتی یافت نشد" Description="فیلترها را تغییر دهید یا یادداشت جدید بسازید." />
+            }
+            else
+            {
+                <div class="list">
+                    @foreach (var n in _notes)
+                    {
+                        <div class="list__item">
+                            <div class="list__main">
+                                <div class="list__title">
+                                    @if (n.IsPinned)
+                                    {
+                                        <span class="badge badge--accent">سنجاق</span>
+                                    }
+                                    @n.Title
+                                </div>
+                                <div class="list__meta">@n.Excerpt</div>
+                                <div class="row row--wrap mt-2">
+                                    <span class="chip">@NoteTypeLabel(n.NoteType)</span>
+                                    @foreach (var tag in n.Tags)
+                                    {
+                                        <span class="chip">@tag.Name</span>
+                                    }
+                                </div>
+                            </div>
+                            <div class="list__aside">
+                                <button class="btn btn--sm" @onclick="() => OpenNoteAsync(n.Id)" disabled="@_busy">باز کردن</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <div class="stack">
+            @if (_noteDetail is null)
+            {
+                <section class="card">
+                    <div class="card__header"><span class="card__title">یادداشت جدید</span></div>
+                    <div class="card__body">
+                        <div class="field">
+                            <label class="field__label">عنوان</label>
+                            <input class="input" @bind="_newNoteTitle" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">نوع</label>
+                            <select class="select" @bind="_newNoteType">
+                                @foreach (var t in Enum.GetValues<NoteType>())
+                                {
+                                    <option value="@t">@NoteTypeLabel(t)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label class="field__label">متن</label>
+                            <textarea class="textarea" rows="8" @bind="_newNoteContent"></textarea>
+                        </div>
+                        <button class="btn btn--primary btn--block" @onclick="CreateNoteAsync" disabled="@_busy">ثبت یادداشت</button>
+                    </div>
+                </section>
+            }
+            else
+            {
+                <section class="card">
+                    <div class="card__header">
+                        <span class="card__title">@_noteDetail.Title</span>
+                        <div class="card__actions">
+                            <button class="btn btn--sm btn--ghost" @onclick="CloseNote">بستن</button>
+                        </div>
+                    </div>
+                    <div class="card__body">
+                        <div class="row row--wrap mb-3">
+                            <span class="chip">@NoteTypeLabel(_noteDetail.NoteType)</span>
+                            <span class="text-faint text-sm">آخرین ویرایش: @Dates.FormatDateTime(_noteDetail.UpdatedAtUtc)</span>
+                        </div>
+
+                        <div class="field">
+                            <label class="field__label">عنوان</label>
+                            <input class="input" @bind="_editNoteTitle" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">نوع</label>
+                            <select class="select" @bind="_editNoteType">
+                                @foreach (var t in Enum.GetValues<NoteType>())
+                                {
+                                    <option value="@t">@NoteTypeLabel(t)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label class="field__label">متن</label>
+                            <textarea class="textarea" rows="10" @bind="_editNoteContent"></textarea>
+                        </div>
+
+                        <div class="row row--wrap mb-3">
+                            <button class="btn btn--primary" @onclick="SaveNoteAsync" disabled="@_busy">ذخیره</button>
+                            <button class="btn btn--ghost" @onclick="TogglePinAsync" disabled="@_busy">
+                                @(_noteDetail.IsPinned ? "برداشتن سنجاق" : "سنجاق کردن")
+                            </button>
+                            <button class="btn btn--danger" @onclick="DeleteNoteAsync" disabled="@_busy">حذف</button>
+                        </div>
+
+                        <div class="card__title mb-2">برچسب‌ها</div>
+                        <div class="row row--wrap mb-3">
+                            @if (_noteDetail.Tags.Count == 0)
+                            {
+                                <span class="text-faint text-sm">برچسبی متصل نیست.</span>
+                            }
+                            @foreach (var tag in _noteDetail.Tags)
+                            {
+                                <span class="chip">
+                                    @tag.Name
+                                    <button class="btn btn--sm btn--ghost" @onclick="() => DetachTagAsync(tag.Id)" disabled="@_busy">×</button>
+                                </span>
+                            }
+                        </div>
+                        <div class="form-row">
+                            <div class="field">
+                                <label class="field__label">افزودن برچسب</label>
+                                <select class="select" @bind="_attachTagId">
+                                    <option value="">— انتخاب —</option>
+                                    @foreach (var tag in _tags)
+                                    {
+                                        <option value="@tag.Id">@tag.Name</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label class="field__label">&nbsp;</label>
+                                <button class="btn btn--block" @onclick="AttachTagAsync" disabled="@_busy">افزودن</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            }
+        </div>
+    </div>
+}
+else if (_tab == "tags")
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">برچسب‌ها</span>
+                <span class="card__subtitle">@_tags.Count مورد</span>
+            </div>
+
+            @if (_tags.Count == 0)
+            {
+                <EmptyState Title="برچسبی ثبت نشده" Description="برچسب‌ها برای دسته‌بندی یادداشت‌ها استفاده می‌شوند." />
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>نام</th>
+                                <th>رنگ</th>
+                                <th class="actions">عملیات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var tag in _tags)
+                            {
+                                <tr>
+                                    <td>@tag.Name</td>
+                                    <td class="text-muted nums">@tag.Color</td>
+                                    <td class="actions">
+                                        <button class="btn btn--sm btn--ghost" @onclick="() => StartRenameTag(tag)" disabled="@_busy">ویرایش</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">@(_editingTagId.HasValue ? "ویرایش برچسب" : "برچسب جدید")</span>
+            </div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">نام</label>
+                    <input class="input" @bind="_tagName" />
+                </div>
+                <div class="field">
+                    <label class="field__label">رنگ</label>
+                    <input class="input" @bind="_tagColor" placeholder="#8c1f2b" />
+                </div>
+                <div class="row row--wrap">
+                    <button class="btn btn--primary" @onclick="SaveTagAsync" disabled="@_busy">
+                        @(_editingTagId.HasValue ? "ذخیره" : "ثبت")
+                    </button>
+                    @if (_editingTagId.HasValue)
+                    {
+                        <button class="btn btn--ghost" @onclick="CancelTagEdit" disabled="@_busy">انصراف</button>
+                    }
+                </div>
+            </div>
+        </section>
+    </div>
+}
+else
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">یادداشت‌های روزانه</span>
+                <span class="card__subtitle">@_journal.Count مورد</span>
+            </div>
+
+            @if (_journal.Count == 0)
+            {
+                <EmptyState Title="یادداشتی ثبت نشده" Description="روزنگاری به تشخیص الگوهای ذهنی و انرژی کمک می‌کند." />
+            }
+            else
+            {
+                <div class="list">
+                    @foreach (var j in _journal)
+                    {
+                        <div class="list__item">
+                            <div class="list__main">
+                                <div class="list__title">@j.Title</div>
+                                <div class="list__meta">@Dates.FormatDateLong(j.EntryDate)</div>
+                                <div class="row row--wrap mt-2">
+                                    @if (j.Mood.HasValue)
+                                    {
+                                        <span class="chip">حال: @j.Mood</span>
+                                    }
+                                    @if (j.EnergyLevel.HasValue)
+                                    {
+                                        <span class="chip">انرژی: @j.EnergyLevel</span>
+                                    }
+                                    @if (j.StressLevel.HasValue)
+                                    {
+                                        <span class="chip">استرس: @j.StressLevel</span>
+                                    }
+                                </div>
+                                <div class="text-muted text-sm mt-2">@j.Content</div>
+                            </div>
+                            <div class="list__aside">
+                                <button class="btn btn--sm btn--ghost" @onclick="() => DeleteJournalAsync(j.Id)" disabled="@_busy">حذف</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">یادداشت روزانه جدید</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">تاریخ</label>
+                    <input class="input" type="date" @bind="_journalDate" />
+                </div>
+                <div class="field">
+                    <label class="field__label">عنوان</label>
+                    <input class="input" @bind="_journalTitle" />
+                </div>
+                <div class="field">
+                    <label class="field__label">متن</label>
+                    <textarea class="textarea" rows="6" @bind="_journalContent"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">حال (۱-۱۰)</label>
+                        <input class="input" type="number" min="1" max="10" @bind="_journalMood" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">انرژی (۱-۱۰)</label>
+                        <input class="input" type="number" min="1" max="10" @bind="_journalEnergy" />
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="field__label">استرس (۱-۱۰)</label>
+                    <input class="input" type="number" min="1" max="10" @bind="_journalStress" />
+                </div>
+                <button class="btn btn--primary btn--block" @onclick="CreateJournalAsync" disabled="@_busy">ثبت</button>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<NoteSummary> _notes = [];
+    private IReadOnlyList<TagView> _tags = [];
+    private IReadOnlyList<JournalEntryView> _journal = [];
+    private NoteDetail? _noteDetail;
+
+    private bool _busy;
+    private string _tab = "notes";
+    private string? _error;
+    private string? _notice;
+
+    private string _searchText = string.Empty;
+    private NoteType? _noteTypeFilter;
+    private bool _pinnedOnly;
+
+    private string _newNoteTitle = string.Empty;
+    private string _newNoteContent = string.Empty;
+    private NoteType _newNoteType = NoteType.General;
+
+    private string _editNoteTitle = string.Empty;
+    private string _editNoteContent = string.Empty;
+    private NoteType _editNoteType = NoteType.General;
+    private string _attachTagId = string.Empty;
+
+    private Guid? _editingTagId;
+    private string _tagName = string.Empty;
+    private string _tagColor = "#8c1f2b";
+
+    private DateTime? _journalDate = DateTime.Today;
+    private string _journalTitle = string.Empty;
+    private string _journalContent = string.Empty;
+    private int? _journalMood;
+    private int? _journalEnergy;
+    private int? _journalStress;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private void SetTab(string tab) => _tab = tab;
+
+    private string TabClass(string tab) => _tab == tab ? "btn--primary" : "btn--ghost";
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _tags = await KnowledgeSvc.ListTagsAsync();
+            _journal = await KnowledgeSvc.ListJournalAsync();
+            await ReloadNotesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReloadNotesAsync()
+    {
+        try
+        {
+            _notes = await KnowledgeSvc.ListNotesAsync(
+                new NoteFilter(
+                    string.IsNullOrWhiteSpace(_searchText) ? null : _searchText,
+                    _noteTypeFilter,
+                    null,
+                    _pinnedOnly));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task OpenNoteAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await KnowledgeSvc.GetNoteAsync(id);
+            if (result.IsFailure || result.Value is null)
+            {
+                _error = result.ErrorMessage ?? "یادداشت یافت نشد.";
+                return;
+            }
+
+            _noteDetail = result.Value;
+            _editNoteTitle = result.Value.Title;
+            _editNoteContent = result.Value.Content;
+            _editNoteType = result.Value.NoteType;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void CloseNote()
+    {
+        _noteDetail = null;
+        _attachTagId = string.Empty;
+    }
+
+    private async Task CreateNoteAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateNoteRequest(_newNoteTitle, _newNoteContent, _newNoteType, []);
+            var result = await KnowledgeSvc.CreateNoteAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "یادداشت ثبت شد.";
+            _newNoteTitle = string.Empty;
+            _newNoteContent = string.Empty;
+
+            await ReloadNotesAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveNoteAsync()
+    {
+        if (_noteDetail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await KnowledgeSvc.UpdateNoteAsync(
+                _noteDetail.Id,
+                _editNoteTitle,
+                _editNoteContent,
+                _editNoteType);
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "یادداشت ذخیره شد.";
+            await OpenNoteAsync(_noteDetail.Id);
+            await ReloadNotesAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TogglePinAsync()
+    {
+        if (_noteDetail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await KnowledgeSvc.SetNotePinnedAsync(_noteDetail.Id, !_noteDetail.IsPinned);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenNoteAsync(_noteDetail.Id);
+            await ReloadNotesAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteNoteAsync()
+    {
+        if (_noteDetail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await KnowledgeSvc.DeleteNoteAsync(_noteDetail.Id);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "یادداشت حذف شد.";
+            CloseNote();
+            await ReloadNotesAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AttachTagAsync()
+    {
+        if (_noteDetail is null || !Guid.TryParse(_attachTagId, out var tagId))
+        {
+            _error = "یک برچسب انتخاب کنید.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await KnowledgeSvc.AttachTagAsync(_noteDetail.Id, tagId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _attachTagId = string.Empty;
+            await OpenNoteAsync(_noteDetail.Id);
+            await ReloadNotesAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DetachTagAsync(Guid tagId)
+    {
+        if (_noteDetail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await KnowledgeSvc.DetachTagAsync(_noteDetail.Id, tagId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenNoteAsync(_noteDetail.Id);
+            await ReloadNotesAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void StartRenameTag(TagView tag)
+    {
+        _editingTagId = tag.Id;
+        _tagName = tag.Name;
+        _tagColor = tag.Color;
+    }
+
+    private void CancelTagEdit()
+    {
+        _editingTagId = null;
+        _tagName = string.Empty;
+        _tagColor = "#8c1f2b";
+    }
+
+    private async Task SaveTagAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            Result result;
+            if (_editingTagId.HasValue)
+            {
+                result = await KnowledgeSvc.RenameTagAsync(_editingTagId.Value, _tagName, _tagColor);
+            }
+            else
+            {
+                var created = await KnowledgeSvc.CreateTagAsync(_tagName, _tagColor);
+                result = created.IsFailure ? Result.Failure(created.ErrorCode!, created.ErrorMessage!) : Result.Success();
+            }
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "برچسب ذخیره شد.";
+            CancelTagEdit();
+            _tags = await KnowledgeSvc.ListTagsAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateJournalAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateJournalEntryRequest(
+                _journalDate.HasValue ? DateOnly.FromDateTime(_journalDate.Value) : DateOnly.FromDateTime(DateTime.Today),
+                _journalTitle,
+                _journalContent,
+                _journalMood,
+                _journalEnergy,
+                _journalStress);
+
+            var result = await KnowledgeSvc.CreateJournalEntryAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "یادداشت روزانه ثبت شد.";
+            _journalTitle = string.Empty;
+            _journalContent = string.Empty;
+            _journalMood = null;
+            _journalEnergy = null;
+            _journalStress = null;
+
+            _journal = await KnowledgeSvc.ListJournalAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteJournalAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await KnowledgeSvc.DeleteJournalEntryAsync(id);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _journal = await KnowledgeSvc.ListJournalAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string NoteTypeLabel(NoteType type) => type switch
+    {
+        NoteType.General => "عمومی",
+        NoteType.Idea => "ایده",
+        NoteType.Reference => "مرجع",
+        NoteType.Meeting => "جلسه",
+        NoteType.Learning => "یادگیری",
+        _ => type.ToString()
+    };
+}

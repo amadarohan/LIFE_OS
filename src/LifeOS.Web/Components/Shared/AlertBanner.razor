@@ -1,0 +1,26 @@
+@* Inline feedback banner for success/failure results returned by application services. *@
+
+@if (!string.IsNullOrWhiteSpace(Message))
+{
+    <div class="alert alert--@Kind">
+        @if (!string.IsNullOrWhiteSpace(Title))
+        {
+            <div>
+                <div class="alert__title">@Title</div>
+                <div>@Message</div>
+            </div>
+        }
+        else
+        {
+            <div>@Message</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Message { get; set; }
+
+    /// <summary>ok | warn | danger | info</summary>
+    [Parameter] public string Kind { get; set; } = "info";
+}

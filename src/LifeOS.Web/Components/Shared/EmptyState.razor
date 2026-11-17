@@ -1,0 +1,19 @@
+@* Empty-state block used by every list page. *@
+
+<div class="empty">
+    <div class="empty__title">@Title</div>
+    @if (!string.IsNullOrWhiteSpace(Description))
+    {
+        <div>@Description</div>
+    }
+    @if (Action is not null)
+    {
+        <div class="mt-3">@Action</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public RenderFragment? Action { get; set; }
+}

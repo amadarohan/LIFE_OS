@@ -1,0 +1,418 @@
+@page "/tasks"
+@using LifeOS.Application.UseCases.Tasks
+@using LifeOS.Application.UseCases.Projects
+@using LifeOS.Application.UseCases.Goals
+@inject TaskService TaskSvc
+@inject ProjectService Projects
+@inject GoalService Goals
+@inject IDateTimeFormatter Dates
+@inject INumberFormatter Numbers
+
+<PageTitle>کارها — Life OS</PageTitle>
+
+<PageHeader Eyebrow="اجرا" Title="کارها"
+            Description="همه کارها با امتیاز اولویت محاسبه‌شده. امتیاز از موعد، وابستگی، اتصال به هدف و اقدام بعدی ساخته می‌شود.">
+    <Actions>
+        <button class="btn btn--primary" @onclick="() => _showCreate = !_showCreate">
+            @(_showCreate ? "بستن" : "کار جدید")
+        </button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+@if (_showCreate)
+{
+    <section class="card mb-4">
+        <div class="card__header"><span class="card__title">ثبت کار جدید</span></div>
+        <div class="card__body">
+            <div class="field">
+                <label class="field__label">عنوان</label>
+                <input class="input" @bind="_newTitle" placeholder="مثلاً: نوشتن پیش‌نویس پیشنهاد پروژه" />
+            </div>
+            <div class="field">
+                <label class="field__label">توضیح</label>
+                <textarea class="textarea" @bind="_newDescription"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">پروژه</label>
+                    <select class="select" @bind="_newProjectId">
+                        <option value="">— بدون پروژه —</option>
+                        @foreach (var p in _projects)
+                        {
+                            <option value="@p.Id">@p.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label class="field__label">هدف</label>
+                    <select class="select" @bind="_newGoalId">
+                        <option value="">— بدون هدف —</option>
+                        @foreach (var g in _goals)
+                        {
+                            <option value="@g.Id">@g.Name</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">اولویت</label>
+                    <select class="select" @bind="_newPriority">
+                        @foreach (var p in Enum.GetValues<PriorityLevel>())
+                        {
+                            <option value="@p">@PriorityLabel(p)</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label class="field__label">موعد</label>
+                    <input class="input" type="date" @bind="_newDueDate" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">زمان‌بندی برای روز</label>
+                    <input class="input" type="date" @bind="_newScheduledDate" />
+                </div>
+                <div class="field">
+                    <label class="field__label">تخمین (دقیقه)</label>
+                    <input class="input" type="number" min="0" @bind="_newEstimate" />
+                </div>
+            </div>
+            <div class="row">
+                <button class="btn btn--primary" @onclick="CreateAsync" disabled="@_busy">ثبت</button>
+                <button class="btn btn--ghost" @onclick="() => _showCreate = false">انصراف</button>
+            </div>
+        </div>
+    </section>
+}
+
+<section class="card mb-4">
+    <div class="card__body">
+        <div class="row row--wrap">
+            <div class="field mb-0" style="min-width: 200px">
+                <label class="field__label">وضعیت</label>
+                <select class="select" @bind="_statusFilter" @bind:after="ReloadAsync">
+                    <option value="">همه بازها</option>
+                    @foreach (var s in Enum.GetValues<LifeTaskStatus>())
+                    {
+                        <option value="@s">@StatusLabel(s)</option>
+                    }
+                </select>
+            </div>
+            <div class="field mb-0" style="min-width: 200px">
+                <label class="field__label">پروژه</label>
+                <select class="select" @bind="_projectFilter" @bind:after="ReloadAsync">
+                    <option value="">همه پروژه‌ها</option>
+                    @foreach (var p in _projects)
+                    {
+                        <option value="@p.Id">@p.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="field mb-0" style="min-width: 160px">
+                <label class="field__label">نمایش</label>
+                <label class="checkbox" style="padding-top: 6px">
+                    <input type="checkbox" @bind="_overdueOnly" @bind:after="ReloadAsync" />
+                    فقط عقب‌افتاده
+                </label>
+            </div>
+            <div class="field mb-0" style="min-width: 160px">
+                <label class="field__label">&nbsp;</label>
+                <label class="checkbox" style="padding-top: 6px">
+                    <input type="checkbox" @bind="_includeCompleted" @bind:after="ReloadAsync" />
+                    شامل انجام‌شده‌ها
+                </label>
+            </div>
+            <div class="spacer"></div>
+            <div class="field mb-0">
+                <label class="field__label">&nbsp;</label>
+                <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+@if (_busy && _tasks.Count == 0)
+{
+    <div class="card"><div class="card__body"><div class="skeleton" style="width: 100%"></div></div></div>
+}
+else if (_tasks.Count == 0)
+{
+    <EmptyState Title="کاری یافت نشد"
+                Description="با «کار جدید» شروع کنید یا فیلترها را بازتر کنید." />
+}
+else
+{
+    <div class="table-wrap">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>عنوان</th>
+                    <th>پروژه</th>
+                    <th>وضعیت</th>
+                    <th>اولویت</th>
+                    <th>موعد</th>
+                    <th class="num">امتیاز</th>
+                    <th class="actions">عملیات</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var task in _tasks)
+                {
+                    <tr>
+                        <td>
+                            <div class="row">
+                                @if (task.IsNextAction)
+                                {
+                                    <span class="badge badge--accent">بعدی</span>
+                                }
+                                <span>@task.Title</span>
+                            </div>
+                        </td>
+                        <td class="text-muted">@(task.ProjectName ?? "—")</td>
+                        <td><span class="badge @StatusClass(task.Status)">@StatusLabel(task.Status)</span></td>
+                        <td class="text-muted">@PriorityLabel(task.Priority)</td>
+                        <td class="@(task.IsOverdue ? "text-danger" : "text-muted")">
+                            @(task.DueDate.HasValue ? Dates.FormatDate(task.DueDate.Value) : "—")
+                        </td>
+                        <td class="num">
+                            <span class="badge @BandClass(task.PriorityBand)">@Numbers.Format(task.PriorityScore, 0)</span>
+                        </td>
+                        <td class="actions">
+                            @if (task.Status != LifeTaskStatus.Completed)
+                            {
+                                <button class="btn btn--sm" @onclick="() => CompleteAsync(task.Id)" disabled="@_busy">
+                                    انجام شد
+                                </button>
+                                <button class="btn btn--sm btn--ghost" @onclick="() => ToggleNextAsync(task.Id, task.IsNextAction)" disabled="@_busy">
+                                    @(task.IsNextAction ? "حذف از بعدی" : "اقدام بعدی")
+                                </button>
+                            }
+                            else
+                            {
+                                <button class="btn btn--sm btn--ghost" @onclick="() => ReopenAsync(task.Id)" disabled="@_busy">
+                                    بازگشایی
+                                </button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<TaskSummary> _tasks = [];
+    private IReadOnlyList<ProjectSummary> _projects = [];
+    private IReadOnlyList<GoalSummary> _goals = [];
+
+    private bool _busy;
+    private bool _showCreate;
+    private string? _error;
+    private string? _notice;
+
+    private string _statusFilter = string.Empty;
+    private string _projectFilter = string.Empty;
+    private bool _overdueOnly;
+    private bool _includeCompleted;
+
+    private string _newTitle = string.Empty;
+    private string _newDescription = string.Empty;
+    private string _newProjectId = string.Empty;
+    private string _newGoalId = string.Empty;
+    private PriorityLevel _newPriority = PriorityLevel.Medium;
+    private DateTime? _newDueDate;
+    private DateTime? _newScheduledDate;
+    private int? _newEstimate;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _projects = await Projects.ListAsync(new ProjectFilter());
+        _goals = await Goals.ListAsync(new GoalFilter());
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var filter = new TaskFilter(
+                Status: Enum.TryParse<LifeTaskStatus>(_statusFilter, out var status) ? status : null,
+                ProjectId: Guid.TryParse(_projectFilter, out var projectId) ? projectId : null,
+                OverdueOnly: _overdueOnly,
+                IncludeCompleted: _includeCompleted);
+
+            _tasks = await TaskSvc.ListAsync(filter);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateTaskRequest(
+                _newTitle,
+                string.IsNullOrWhiteSpace(_newDescription) ? null : _newDescription,
+                Guid.TryParse(_newProjectId, out var projectId) ? projectId : null,
+                Guid.TryParse(_newGoalId, out var goalId) ? goalId : null,
+                null,
+                _newPriority,
+                _newDueDate.HasValue ? DateOnly.FromDateTime(_newDueDate.Value) : null,
+                _newScheduledDate.HasValue ? DateOnly.FromDateTime(_newScheduledDate.Value) : null,
+                _newEstimate);
+
+            var result = await TaskSvc.CreateAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "کار ثبت شد.";
+            _newTitle = string.Empty;
+            _newDescription = string.Empty;
+            _newDueDate = null;
+            _newScheduledDate = null;
+            _newEstimate = null;
+            _showCreate = false;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CompleteAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await TaskSvc.ChangeStatusAsync(id, LifeTaskStatus.Completed);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReopenAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await TaskSvc.ChangeStatusAsync(id, LifeTaskStatus.Todo);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleNextAsync(Guid id, bool current)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await TaskSvc.SetNextActionAsync(id, !current);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string StatusLabel(LifeTaskStatus status) => status switch
+    {
+        LifeTaskStatus.Inbox => "صندوق ورودی",
+        LifeTaskStatus.Todo => "برای انجام",
+        LifeTaskStatus.InProgress => "در حال انجام",
+        LifeTaskStatus.Waiting => "در انتظار",
+        LifeTaskStatus.Completed => "انجام‌شده",
+        LifeTaskStatus.Cancelled => "لغو‌شده",
+        LifeTaskStatus.Deferred => "به تعویق افتاده",
+        _ => status.ToString()
+    };
+
+    private static string StatusClass(LifeTaskStatus status) => status switch
+    {
+        LifeTaskStatus.Completed => "badge--ok",
+        LifeTaskStatus.Cancelled => "badge--danger",
+        LifeTaskStatus.InProgress => "badge--info",
+        LifeTaskStatus.Waiting => "badge--warn",
+        LifeTaskStatus.Deferred => "badge--warn",
+        _ => string.Empty
+    };
+
+    private static string PriorityLabel(PriorityLevel priority) => priority switch
+    {
+        PriorityLevel.Critical => "بحرانی",
+        PriorityLevel.High => "بالا",
+        PriorityLevel.Medium => "متوسط",
+        PriorityLevel.Low => "پایین",
+        _ => "بدون اولویت"
+    };
+
+    private static string BandClass(PriorityBand band) => band switch
+    {
+        PriorityBand.Critical => "badge--danger",
+        PriorityBand.High => "badge--warn",
+        PriorityBand.Medium => "badge--info",
+        _ => string.Empty
+    };
+}

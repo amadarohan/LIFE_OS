@@ -1,0 +1,662 @@
+@page "/decisions"
+@using LifeOS.Application.UseCases.Decisions
+@inject DecisionService DecisionSvc
+@inject IDateTimeFormatter Dates
+@inject INumberFormatter Numbers
+
+<PageTitle>تصمیم‌ها — Life OS</PageTitle>
+
+<PageHeader Eyebrow="جهت‌گیری" Title="تصمیم‌ها"
+            Description="دفتر تصمیم‌ها: گزینه‌ها، معیارها و نتیجه واقعی. تصمیم بدون گزینه انتخاب‌شده «ثبت‌شده» نمی‌شود.">
+    <Actions>
+        <button class="btn btn--primary" @onclick="() => _showCreate = !_showCreate">
+            @(_showCreate ? "بستن" : "تصمیم جدید")
+        </button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+@if (_showCreate)
+{
+    <section class="card mb-4">
+        <div class="card__header"><span class="card__title">ثبت تصمیم جدید</span></div>
+        <div class="card__body">
+            <div class="field">
+                <label class="field__label">عنوان</label>
+                <input class="input" @bind="_newTitle" />
+            </div>
+            <div class="field">
+                <label class="field__label">زمینه</label>
+                <textarea class="textarea" @bind="_newContext"></textarea>
+            </div>
+            <div class="field">
+                <label class="field__label">توضیح</label>
+                <textarea class="textarea" @bind="_newDescription"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">تاریخ تصمیم</label>
+                    <input class="input" type="date" @bind="_newDecisionDate" />
+                </div>
+                <div class="field">
+                    <label class="field__label">تاریخ بازبینی</label>
+                    <input class="input" type="date" @bind="_newReviewDate" />
+                </div>
+                <div class="field">
+                    <label class="field__label">اهمیت</label>
+                    <select class="select" @bind="_newImportance">
+                        @foreach (var i in Enum.GetValues<ImportanceLevel>())
+                        {
+                            <option value="@i">@ImportanceLabel(i)</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="field">
+                <label class="field__label">نتیجه مورد انتظار</label>
+                <textarea class="textarea" @bind="_newExpectedOutcome"></textarea>
+            </div>
+            <div class="row">
+                <button class="btn btn--primary" @onclick="CreateAsync" disabled="@_busy">ثبت</button>
+                <button class="btn btn--ghost" @onclick="() => _showCreate = false">انصراف</button>
+            </div>
+        </div>
+    </section>
+}
+
+<section class="card mb-4">
+    <div class="card__body">
+        <div class="row row--wrap">
+            <div class="field mb-0" style="min-width: 180px">
+                <label class="field__label">وضعیت</label>
+                <select class="select" @bind="_statusFilter" @bind:after="ReloadAsync">
+                    <option value="">همه</option>
+                    @foreach (var s in Enum.GetValues<DecisionStatus>())
+                    {
+                        <option value="@s">@StatusLabel(s)</option>
+                    }
+                </select>
+            </div>
+            <div class="field mb-0" style="min-width: 180px">
+                <label class="field__label">اهمیت</label>
+                <select class="select" @bind="_importanceFilter" @bind:after="ReloadAsync">
+                    <option value="">همه</option>
+                    @foreach (var i in Enum.GetValues<ImportanceLevel>())
+                    {
+                        <option value="@i">@ImportanceLabel(i)</option>
+                    }
+                </select>
+            </div>
+            <div class="field mb-0" style="min-width: 170px">
+                <label class="field__label">&nbsp;</label>
+                <label class="checkbox" style="padding-top: 6px">
+                    <input type="checkbox" @bind="_reviewDueOnly" @bind:after="ReloadAsync" />
+                    فقط بازبینی سررسید
+                </label>
+            </div>
+            <div class="spacer"></div>
+            <div class="field mb-0">
+                <label class="field__label">&nbsp;</label>
+                <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<div class="grid grid--sidebar">
+    <div class="stack">
+        @if (_decisions.Count == 0)
+        {
+            <EmptyState Title="تصمیمی یافت نشد" Description="یک تصمیم جدید ثبت کنید یا فیلترها را تغییر دهید." />
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>عنوان</th>
+                            <th>وضعیت</th>
+                            <th>اهمیت</th>
+                            <th>تاریخ</th>
+                            <th class="num">گزینه</th>
+                            <th>انتخاب‌شده</th>
+                            <th class="actions">عملیات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var d in _decisions)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="row">
+                                        @if (d.IsReviewDue)
+                                        {
+                                            <span class="badge badge--warn">بازبینی</span>
+                                        }
+                                        <span>@d.Title</span>
+                                    </div>
+                                </td>
+                                <td><span class="badge @StatusClass(d.Status)">@StatusLabel(d.Status)</span></td>
+                                <td class="text-muted">@ImportanceLabel(d.Importance)</td>
+                                <td class="text-muted">@Dates.FormatDate(d.DecisionDate)</td>
+                                <td class="num text-muted">@Numbers.Format(d.OptionCount)</td>
+                                <td class="text-muted">@(d.ChosenOptionName ?? "—")</td>
+                                <td class="actions">
+                                    <button class="btn btn--sm" @onclick="() => OpenAsync(d.Id)" disabled="@_busy">جزئیات</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <div class="stack">
+        @if (_detail is null)
+        {
+            <section class="card">
+                <div class="card__header"><span class="card__title">جزئیات تصمیم</span></div>
+                <div class="card__body">
+                    <p class="text-muted text-sm">یک تصمیم را انتخاب کنید تا گزینه‌ها و نتیجه آن را ببینید.</p>
+                </div>
+            </section>
+        }
+        else
+        {
+            var d = _detail;
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">@d.Title</span>
+                    <div class="card__actions">
+                        <button class="btn btn--sm btn--ghost" @onclick="() => _detail = null">بستن</button>
+                    </div>
+                </div>
+                <div class="card__body">
+                    @if (!string.IsNullOrWhiteSpace(d.Context))
+                    {
+                        <p class="text-sm text-muted mb-2">@d.Context</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(d.ExpectedOutcome))
+                    {
+                        <p class="text-sm text-muted mb-2">نتیجه مورد انتظار: @d.ExpectedOutcome</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(d.ActualOutcome))
+                    {
+                        <p class="text-sm mb-2">نتیجه واقعی: @d.ActualOutcome</p>
+                    }
+
+                    <div class="row row--between mt-3">
+                        <span class="text-sm text-muted">وضعیت</span>
+                        <span class="badge @StatusClass(d.Status)">@StatusLabel(d.Status)</span>
+                    </div>
+
+                    <div class="field mt-3">
+                        <label class="field__label">تغییر وضعیت</label>
+                        <select class="select" @bind="_newStatus">
+                            @foreach (var s in Enum.GetValues<DecisionStatus>())
+                            {
+                                <option value="@s">@StatusLabel(s)</option>
+                            }
+                        </select>
+                    </div>
+                    <button class="btn btn--sm btn--block" @onclick="ChangeStatusAsync" disabled="@_busy">
+                        اعمال وضعیت
+                    </button>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">گزینه‌ها</span>
+                    <span class="card__subtitle">@d.Options.Count مورد</span>
+                </div>
+
+                @if (d.Options.Count == 0)
+                {
+                    <div class="card__body">
+                        <p class="text-muted text-sm">گزینه‌ای ثبت نشده است.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="list">
+                        @foreach (var o in d.Options)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">
+                                        @o.Name
+                                        @if (o.IsChosen)
+                                        {
+                                            <span class="badge badge--ok">انتخاب‌شده</span>
+                                        }
+                                    </div>
+                                    <div class="list__meta">
+                                        @if (o.Score.HasValue)
+                                        {
+                                            <span>امتیاز @Numbers.Format(o.Score.Value, 1)</span>
+                                        }
+                                        @if (o.ProbabilityOfSuccess.HasValue)
+                                        {
+                                            <span>احتمال @Numbers.FormatPercent(o.ProbabilityOfSuccess.Value, 0)</span>
+                                        }
+                                        @if (o.EstimatedCost.HasValue)
+                                        {
+                                            <span>هزینه @Numbers.Format(o.EstimatedCost.Value, 0)</span>
+                                        }
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(o.PotentialRisks))
+                                    {
+                                        <div class="list__meta text-faint">ریسک: @o.PotentialRisks</div>
+                                    }
+                                </div>
+                                <div class="list__aside">
+                                    @if (!o.IsChosen)
+                                    {
+                                        <button class="btn btn--sm" @onclick="() => ChooseAsync(o.Id)" disabled="@_busy">
+                                            انتخاب
+                                        </button>
+                                    }
+                                    <button class="btn btn--sm btn--ghost" @onclick="() => RemoveOptionAsync(o.Id)" disabled="@_busy">
+                                        حذف
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+
+                <div class="card__footer">
+                    <div class="field mb-2">
+                        <label class="field__label">گزینه جدید</label>
+                        <input class="input" @bind="_newOptionName" placeholder="نام گزینه" />
+                    </div>
+                    <div class="form-row">
+                        <div class="field">
+                            <label class="field__label">امتیاز</label>
+                            <input class="input" type="number" step="0.1" @bind="_newOptionScore" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">احتمال موفقیت (٪)</label>
+                            <input class="input" type="number" step="1" min="0" max="100" @bind="_newOptionProbability" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">هزینه تخمینی</label>
+                            <input class="input" type="number" step="0.01" @bind="_newOptionCost" />
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label class="field__label">ریسک‌های بالقوه</label>
+                        <textarea class="textarea" @bind="_newOptionRisks"></textarea>
+                    </div>
+                    <button class="btn btn--sm btn--primary btn--block" @onclick="AddOptionAsync" disabled="@_busy">
+                        افزودن گزینه
+                    </button>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card__header"><span class="card__title">ثبت نتیجه واقعی</span></div>
+                <div class="card__body">
+                    <div class="field">
+                        <label class="field__label">نتیجه واقعی</label>
+                        <textarea class="textarea" @bind="_outcomeActual"></textarea>
+                    </div>
+                    <div class="field">
+                        <label class="field__label">چه چیزی خوب پیش رفت</label>
+                        <textarea class="textarea" @bind="_outcomeWell"></textarea>
+                    </div>
+                    <div class="field">
+                        <label class="field__label">چه چیزی بد پیش رفت</label>
+                        <textarea class="textarea" @bind="_outcomeWrong"></textarea>
+                    </div>
+                    <div class="field">
+                        <label class="field__label">درس‌های آموخته</label>
+                        <textarea class="textarea" @bind="_outcomeLessons"></textarea>
+                    </div>
+                    <label class="checkbox mb-3">
+                        <input type="checkbox" @bind="_outcomeSuccessful" />
+                        تصمیم موفق بود
+                    </label>
+                    <button class="btn btn--sm btn--primary btn--block" @onclick="RecordOutcomeAsync" disabled="@_busy">
+                        ثبت بازبینی
+                    </button>
+                </div>
+            </section>
+        }
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<DecisionSummary> _decisions = [];
+    private DecisionDetail? _detail;
+
+    private bool _busy;
+    private bool _showCreate;
+    private string? _error;
+    private string? _notice;
+
+    private string _statusFilter = string.Empty;
+    private string _importanceFilter = string.Empty;
+    private bool _reviewDueOnly;
+
+    private string _newTitle = string.Empty;
+    private string _newDescription = string.Empty;
+    private string _newContext = string.Empty;
+    private string _newExpectedOutcome = string.Empty;
+    private DateTime? _newDecisionDate = DateTime.Today;
+    private DateTime? _newReviewDate;
+    private ImportanceLevel _newImportance = ImportanceLevel.Medium;
+
+    private DecisionStatus _newStatus = DecisionStatus.Draft;
+    private string _newOptionName = string.Empty;
+    private decimal? _newOptionScore;
+    private decimal? _newOptionProbability;
+    private decimal? _newOptionCost;
+    private string _newOptionRisks = string.Empty;
+
+    private string _outcomeActual = string.Empty;
+    private string _outcomeWell = string.Empty;
+    private string _outcomeWrong = string.Empty;
+    private string _outcomeLessons = string.Empty;
+    private bool _outcomeSuccessful;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var filter = new DecisionFilter(
+                Status: Enum.TryParse<DecisionStatus>(_statusFilter, out var status) ? status : null,
+                Importance: Enum.TryParse<ImportanceLevel>(_importanceFilter, out var importance) ? importance : null,
+                ReviewDueOnly: _reviewDueOnly);
+
+            _decisions = await DecisionSvc.ListAsync(filter);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateDecisionRequest(
+                _newTitle,
+                string.IsNullOrWhiteSpace(_newDescription) ? null : _newDescription,
+                string.IsNullOrWhiteSpace(_newContext) ? null : _newContext,
+                _newDecisionDate.HasValue ? DateOnly.FromDateTime(_newDecisionDate.Value) : DateOnly.FromDateTime(DateTime.Today),
+                _newImportance,
+                string.IsNullOrWhiteSpace(_newExpectedOutcome) ? null : _newExpectedOutcome,
+                _newReviewDate.HasValue ? DateOnly.FromDateTime(_newReviewDate.Value) : null);
+
+            var result = await DecisionSvc.CreateAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "تصمیم ثبت شد.";
+            _newTitle = string.Empty;
+            _newDescription = string.Empty;
+            _newContext = string.Empty;
+            _newExpectedOutcome = string.Empty;
+            _newReviewDate = null;
+            _showCreate = false;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OpenAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await DecisionSvc.GetAsync(id);
+            if (result.IsFailure || result.Value is null)
+            {
+                _error = result.ErrorMessage ?? "تصمیم یافت نشد.";
+                return;
+            }
+
+            _detail = result.Value;
+            _newStatus = result.Value.Status;
+            _outcomeActual = result.Value.ActualOutcome ?? string.Empty;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ChangeStatusAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await DecisionSvc.ChangeStatusAsync(_detail.Id, _newStatus);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AddOptionAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var request = new AddDecisionOptionRequest(
+                _detail.Id,
+                _newOptionName,
+                null,
+                null,
+                string.IsNullOrWhiteSpace(_newOptionRisks) ? null : _newOptionRisks,
+                _newOptionCost,
+                null,
+                _newOptionProbability,
+                null,
+                _newOptionScore);
+
+            var result = await DecisionSvc.AddOptionAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _newOptionName = string.Empty;
+            _newOptionRisks = string.Empty;
+            _newOptionScore = null;
+            _newOptionProbability = null;
+            _newOptionCost = null;
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ChooseAsync(Guid optionId)
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await DecisionSvc.ChooseOptionAsync(_detail.Id, optionId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RemoveOptionAsync(Guid optionId)
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await DecisionSvc.RemoveOptionAsync(_detail.Id, optionId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RecordOutcomeAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await DecisionSvc.RecordOutcomeAsync(
+                _detail.Id,
+                string.IsNullOrWhiteSpace(_outcomeActual) ? null : _outcomeActual,
+                string.IsNullOrWhiteSpace(_outcomeWell) ? null : _outcomeWell,
+                string.IsNullOrWhiteSpace(_outcomeWrong) ? null : _outcomeWrong,
+                string.IsNullOrWhiteSpace(_outcomeLessons) ? null : _outcomeLessons,
+                _outcomeSuccessful);
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "بازبینی ثبت شد.";
+            _outcomeWell = string.Empty;
+            _outcomeWrong = string.Empty;
+            _outcomeLessons = string.Empty;
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string StatusLabel(DecisionStatus status) => status switch
+    {
+        DecisionStatus.Draft => "پیش‌نویس",
+        DecisionStatus.Evaluating => "در حال ارزیابی",
+        DecisionStatus.Decided => "تصمیم گرفته‌شده",
+        DecisionStatus.Reviewed => "بازبینی‌شده",
+        DecisionStatus.Cancelled => "لغو‌شده",
+        _ => status.ToString()
+    };
+
+    private static string StatusClass(DecisionStatus status) => status switch
+    {
+        DecisionStatus.Decided => "badge--ok",
+        DecisionStatus.Reviewed => "badge--info",
+        DecisionStatus.Evaluating => "badge--warn",
+        DecisionStatus.Cancelled => "badge--danger",
+        _ => string.Empty
+    };
+
+    private static string ImportanceLabel(ImportanceLevel level) => level switch
+    {
+        ImportanceLevel.Critical => "بحرانی",
+        ImportanceLevel.High => "بالا",
+        ImportanceLevel.Medium => "متوسط",
+        _ => "پایین"
+    };
+}

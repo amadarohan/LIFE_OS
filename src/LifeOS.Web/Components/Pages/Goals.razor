@@ -1,0 +1,585 @@
+@page "/goals"
+@using LifeOS.Application.UseCases.Goals
+@using LifeOS.Application.UseCases.LifeDomains
+@inject GoalService GoalSvc
+@inject LifeDomainService Domains
+@inject IDateTimeFormatter Dates
+@inject INumberFormatter Numbers
+
+<PageTitle>اهداف — Life OS</PageTitle>
+
+<PageHeader Eyebrow="جهت‌گیری" Title="اهداف"
+            Description="پیشرفت هدف از نتایج کلیدی وزن‌دار محاسبه می‌شود. درصد دستی فقط برای اهدافی پذیرفته می‌شود که نتیجه کلیدی ندارند.">
+    <Actions>
+        <button class="btn btn--primary" @onclick="() => _showCreate = !_showCreate">
+            @(_showCreate ? "بستن" : "هدف جدید")
+        </button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+@if (_showCreate)
+{
+    <section class="card mb-4">
+        <div class="card__header"><span class="card__title">ثبت هدف جدید</span></div>
+        <div class="card__body">
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">نام</label>
+                    <input class="input" @bind="_newName" />
+                </div>
+                <div class="field">
+                    <label class="field__label">حوزه زندگی</label>
+                    <select class="select" @bind="_newDomainId">
+                        <option value="">— بدون حوزه —</option>
+                        @foreach (var d in _domains)
+                        {
+                            <option value="@d.Id">@d.Name</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">نوع هدف</label>
+                    <select class="select" @bind="_newType">
+                        @foreach (var t in Enum.GetValues<GoalType>())
+                        {
+                            <option value="@t">@TypeLabel(t)</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label class="field__label">اولویت</label>
+                    <select class="select" @bind="_newPriority">
+                        @foreach (var p in Enum.GetValues<PriorityLevel>())
+                        {
+                            <option value="@p">@PriorityLabel(p)</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="field">
+                <label class="field__label">توضیح</label>
+                <textarea class="textarea" @bind="_newDescription"></textarea>
+            </div>
+            <div class="field">
+                <label class="field__label">چرا مهم است</label>
+                <textarea class="textarea" @bind="_newWhy"></textarea>
+            </div>
+            <div class="field">
+                <label class="field__label">معیار موفقیت</label>
+                <textarea class="textarea" @bind="_newCriteria"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">تاریخ شروع</label>
+                    <input class="input" type="date" @bind="_newStartDate" />
+                </div>
+                <div class="field">
+                    <label class="field__label">تاریخ هدف</label>
+                    <input class="input" type="date" @bind="_newTargetDate" />
+                </div>
+            </div>
+            <div class="row">
+                <button class="btn btn--primary" @onclick="CreateAsync" disabled="@_busy">ثبت</button>
+                <button class="btn btn--ghost" @onclick="() => _showCreate = false">انصراف</button>
+            </div>
+        </div>
+    </section>
+}
+
+<section class="card mb-4">
+    <div class="card__body">
+        <div class="row row--wrap">
+            <div class="field mb-0" style="min-width: 180px">
+                <label class="field__label">وضعیت</label>
+                <select class="select" @bind="_statusFilter" @bind:after="ReloadAsync">
+                    <option value="">همه</option>
+                    @foreach (var s in Enum.GetValues<GoalStatus>())
+                    {
+                        <option value="@s">@StatusLabel(s)</option>
+                    }
+                </select>
+            </div>
+            <div class="field mb-0" style="min-width: 180px">
+                <label class="field__label">نوع</label>
+                <select class="select" @bind="_typeFilter" @bind:after="ReloadAsync">
+                    <option value="">همه</option>
+                    @foreach (var t in Enum.GetValues<GoalType>())
+                    {
+                        <option value="@t">@TypeLabel(t)</option>
+                    }
+                </select>
+            </div>
+            <div class="field mb-0" style="min-width: 200px">
+                <label class="field__label">حوزه زندگی</label>
+                <select class="select" @bind="_domainFilter" @bind:after="ReloadAsync">
+                    <option value="">همه حوزه‌ها</option>
+                    @foreach (var d in _domains)
+                    {
+                        <option value="@d.Id">@d.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="spacer"></div>
+            <div class="field mb-0">
+                <label class="field__label">&nbsp;</label>
+                <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<div class="grid grid--sidebar">
+    <div class="stack">
+        @if (_goals.Count == 0)
+        {
+            <EmptyState Title="هدفی یافت نشد" Description="یک هدف جدید بسازید یا فیلترها را تغییر دهید." />
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>نام</th>
+                            <th>حوزه</th>
+                            <th>نوع</th>
+                            <th>وضعیت</th>
+                            <th>پیشرفت</th>
+                            <th>تاریخ هدف</th>
+                            <th class="actions">عملیات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var g in _goals)
+                        {
+                            <tr>
+                                <td>@g.Name</td>
+                                <td class="text-muted">@(g.LifeDomainName ?? "—")</td>
+                                <td class="text-muted">@TypeLabel(g.GoalType)</td>
+                                <td><span class="badge @StatusClass(g.Status)">@StatusLabel(g.Status)</span></td>
+                                <td style="min-width: 130px">
+                                    <ProgressBar Value="g.ProgressPercentage"
+                                                 Tone="@(g.IsOverdue ? "danger" : "accent")"
+                                                 ValueLabel="@Numbers.FormatPercent(g.ProgressPercentage, 0)" />
+                                </td>
+                                <td class="@(g.IsOverdue ? "text-danger" : "text-muted")">
+                                    @(g.TargetDate.HasValue ? Dates.FormatDate(g.TargetDate.Value) : "—")
+                                </td>
+                                <td class="actions">
+                                    <button class="btn btn--sm" @onclick="() => OpenAsync(g.Id)" disabled="@_busy">جزئیات</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <div class="stack">
+        @if (_detail is null)
+        {
+            <section class="card">
+                <div class="card__header"><span class="card__title">جزئیات هدف</span></div>
+                <div class="card__body">
+                    <p class="text-muted text-sm">یک هدف را انتخاب کنید تا نتایج کلیدی آن را ببینید.</p>
+                </div>
+            </section>
+        }
+        else
+        {
+            var d = _detail;
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">@d.Name</span>
+                    <div class="card__actions">
+                        <button class="btn btn--sm btn--ghost" @onclick="() => _detail = null">بستن</button>
+                    </div>
+                </div>
+                <div class="card__body">
+                    @if (!string.IsNullOrWhiteSpace(d.WhyItMatters))
+                    {
+                        <p class="text-sm text-muted mb-2">@d.WhyItMatters</p>
+                    }
+
+                    <div class="row row--between mb-2">
+                        <span class="text-sm text-muted">پیشرفت</span>
+                        <span class="text-sm nums">@Numbers.FormatPercent(d.ProgressPercentage, 0)</span>
+                    </div>
+                    <ProgressBar Value="d.ProgressPercentage" ShowValue="false" />
+
+                    <div class="row row--between mt-3">
+                        <span class="text-sm text-muted">وضعیت</span>
+                        <span class="badge @StatusClass(d.Status)">@StatusLabel(d.Status)</span>
+                    </div>
+
+                    <div class="field mt-3">
+                        <label class="field__label">تغییر وضعیت</label>
+                        <select class="select" @bind="_newStatus">
+                            @foreach (var s in Enum.GetValues<GoalStatus>())
+                            {
+                                <option value="@s">@StatusLabel(s)</option>
+                            }
+                        </select>
+                    </div>
+                    <button class="btn btn--sm btn--block" @onclick="ChangeStatusAsync" disabled="@_busy">
+                        اعمال وضعیت
+                    </button>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">نتایج کلیدی</span>
+                    <span class="card__subtitle">@d.KeyResults.Count مورد</span>
+                </div>
+
+                @if (d.KeyResults.Count == 0)
+                {
+                    <div class="card__body">
+                        <p class="text-muted text-sm">نتیجه کلیدی ثبت نشده است. بدون نتیجه کلیدی، پیشرفت دستی است.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="list">
+                        @foreach (var kr in d.KeyResults)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@kr.Name</div>
+                                    <div class="list__meta">
+                                        <span class="nums">@Numbers.Format(kr.CurrentValue, 1) / @Numbers.Format(kr.TargetValue, 1) @kr.Unit</span>
+                                        <span>وزن @Numbers.Format(kr.Weight, 1)</span>
+                                    </div>
+                                    <div class="mt-2">
+                                        <ProgressBar Value="kr.ProgressPercentage ?? 0" ShowValue="false" />
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    <input class="input" type="number" step="0.01" style="max-width: 110px"
+                                           @bind="_keyResultValues[kr.Id]" />
+                                    <button class="btn btn--sm" @onclick="() => RecordKeyResultAsync(kr.Id)" disabled="@_busy">
+                                        ثبت
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+
+                <div class="card__footer">
+                    <div class="field mb-2">
+                        <label class="field__label">نتیجه کلیدی جدید</label>
+                        <input class="input" @bind="_newKeyResultName" placeholder="نام" />
+                    </div>
+                    <div class="form-row">
+                        <div class="field">
+                            <label class="field__label">واحد</label>
+                            <input class="input" @bind="_newKeyResultUnit" placeholder="مثلاً کیلوگرم" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">مقدار اولیه</label>
+                            <input class="input" type="number" step="0.01" @bind="_newKeyResultInitial" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">مقدار هدف</label>
+                            <input class="input" type="number" step="0.01" @bind="_newKeyResultTarget" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">وزن</label>
+                            <input class="input" type="number" step="0.1" @bind="_newKeyResultWeight" />
+                        </div>
+                    </div>
+                    <button class="btn btn--sm btn--primary btn--block" @onclick="AddKeyResultAsync" disabled="@_busy">
+                        افزودن نتیجه کلیدی
+                    </button>
+                </div>
+            </section>
+        }
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<GoalSummary> _goals = [];
+    private IReadOnlyList<LifeDomainSummary> _domains = [];
+    private GoalDetail? _detail;
+    private readonly Dictionary<Guid, decimal> _keyResultValues = [];
+
+    private bool _busy;
+    private bool _showCreate;
+    private string? _error;
+    private string? _notice;
+
+    private string _statusFilter = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _domainFilter = string.Empty;
+
+    private string _newName = string.Empty;
+    private string _newDescription = string.Empty;
+    private string _newDomainId = string.Empty;
+    private GoalType _newType = GoalType.MidTerm;
+    private PriorityLevel _newPriority = PriorityLevel.Medium;
+    private string _newWhy = string.Empty;
+    private string _newCriteria = string.Empty;
+    private DateTime? _newStartDate;
+    private DateTime? _newTargetDate;
+
+    private GoalStatus _newStatus = GoalStatus.Active;
+    private string _newKeyResultName = string.Empty;
+    private string _newKeyResultUnit = string.Empty;
+    private decimal _newKeyResultInitial;
+    private decimal _newKeyResultTarget = 100m;
+    private decimal _newKeyResultWeight = 1m;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _domains = await Domains.ListAsync();
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var filter = new GoalFilter(
+                Status: Enum.TryParse<GoalStatus>(_statusFilter, out var status) ? status : null,
+                LifeDomainId: Guid.TryParse(_domainFilter, out var domainId) ? domainId : null,
+                GoalType: Enum.TryParse<GoalType>(_typeFilter, out var type) ? type : null);
+
+            _goals = await GoalSvc.ListAsync(filter);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateGoalRequest(
+                _newName,
+                Guid.TryParse(_newDomainId, out var domainId) ? domainId : null,
+                _newType,
+                string.IsNullOrWhiteSpace(_newDescription) ? null : _newDescription,
+                _newPriority,
+                _newStartDate.HasValue ? DateOnly.FromDateTime(_newStartDate.Value) : null,
+                _newTargetDate.HasValue ? DateOnly.FromDateTime(_newTargetDate.Value) : null,
+                string.IsNullOrWhiteSpace(_newWhy) ? null : _newWhy,
+                string.IsNullOrWhiteSpace(_newCriteria) ? null : _newCriteria);
+
+            var result = await GoalSvc.CreateAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "هدف ثبت شد.";
+            _newName = string.Empty;
+            _newDescription = string.Empty;
+            _newWhy = string.Empty;
+            _newCriteria = string.Empty;
+            _newStartDate = null;
+            _newTargetDate = null;
+            _showCreate = false;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OpenAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await GoalSvc.GetAsync(id);
+            if (result.IsFailure || result.Value is null)
+            {
+                _error = result.ErrorMessage ?? "هدف یافت نشد.";
+                return;
+            }
+
+            _detail = result.Value;
+            _newStatus = result.Value.Status;
+
+            _keyResultValues.Clear();
+            foreach (var kr in result.Value.KeyResults)
+            {
+                _keyResultValues[kr.Id] = kr.CurrentValue;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ChangeStatusAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await GoalSvc.ChangeStatusAsync(_detail.Id, _newStatus);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AddKeyResultAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await GoalSvc.AddKeyResultAsync(
+                _detail.Id,
+                _newKeyResultName,
+                null,
+                _newKeyResultUnit,
+                _newKeyResultInitial,
+                _newKeyResultTarget,
+                _newKeyResultWeight);
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _newKeyResultName = string.Empty;
+            _newKeyResultUnit = string.Empty;
+            _newKeyResultInitial = 0m;
+            _newKeyResultTarget = 100m;
+            _newKeyResultWeight = 1m;
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RecordKeyResultAsync(Guid keyResultId)
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var value = _keyResultValues.TryGetValue(keyResultId, out var v) ? v : 0m;
+            var result = await GoalSvc.RecordKeyResultValueAsync(_detail.Id, keyResultId, value);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string TypeLabel(GoalType type) => type switch
+    {
+        GoalType.ShortTerm => "کوتاه‌مدت",
+        GoalType.MidTerm => "میان‌مدت",
+        GoalType.LongTerm => "بلندمدت",
+        GoalType.Habit => "عادت",
+        GoalType.Outcome => "نتیجه‌محور",
+        _ => type.ToString()
+    };
+
+    private static string StatusLabel(GoalStatus status) => status switch
+    {
+        GoalStatus.Draft => "پیش‌نویس",
+        GoalStatus.Active => "فعال",
+        GoalStatus.OnHold => "متوقف",
+        GoalStatus.Completed => "تکمیل‌شده",
+        GoalStatus.Abandoned => "رها‌شده",
+        _ => status.ToString()
+    };
+
+    private static string StatusClass(GoalStatus status) => status switch
+    {
+        GoalStatus.Active => "badge--info",
+        GoalStatus.Completed => "badge--ok",
+        GoalStatus.Abandoned => "badge--danger",
+        GoalStatus.OnHold => "badge--warn",
+        _ => string.Empty
+    };
+
+    private static string PriorityLabel(PriorityLevel priority) => priority switch
+    {
+        PriorityLevel.Critical => "بحرانی",
+        PriorityLevel.High => "بالا",
+        PriorityLevel.Medium => "متوسط",
+        PriorityLevel.Low => "پایین",
+        _ => "بدون اولویت"
+    };
+}

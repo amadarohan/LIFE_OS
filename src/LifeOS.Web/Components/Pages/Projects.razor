@@ -1,0 +1,685 @@
+@page "/projects"
+@using LifeOS.Application.UseCases.Projects
+@using LifeOS.Application.UseCases.LifeDomains
+@using LifeOS.Application.UseCases.Goals
+@inject ProjectService ProjectSvc
+@inject LifeDomainService Domains
+@inject GoalService Goals
+@inject IDateTimeFormatter Dates
+@inject INumberFormatter Numbers
+
+<PageTitle>پروژه‌ها — Life OS</PageTitle>
+
+<PageHeader Eyebrow="جهت‌گیری" Title="پروژه‌ها"
+            Description="پروژه‌ها واحد اجرای کار هستند. پیشرفت از نقاط عطف محاسبه می‌شود، نه از حدس.">
+    <Actions>
+        <button class="btn btn--primary" @onclick="() => _showCreate = !_showCreate">
+            @(_showCreate ? "بستن" : "پروژه جدید")
+        </button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+@if (_showCreate)
+{
+    <section class="card mb-4">
+        <div class="card__header"><span class="card__title">ثبت پروژه جدید</span></div>
+        <div class="card__body">
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">نام</label>
+                    <input class="input" @bind="_newName" />
+                </div>
+                <div class="field">
+                    <label class="field__label">حوزه زندگی</label>
+                    <select class="select" @bind="_newDomainId">
+                        <option value="">— بدون حوزه —</option>
+                        @foreach (var d in _domains)
+                        {
+                            <option value="@d.Id">@d.Name</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="field">
+                <label class="field__label">توضیح</label>
+                <textarea class="textarea" @bind="_newDescription"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">اولویت</label>
+                    <select class="select" @bind="_newPriority">
+                        @foreach (var p in Enum.GetValues<PriorityLevel>())
+                        {
+                            <option value="@p">@PriorityLabel(p)</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label class="field__label">تاریخ شروع</label>
+                    <input class="input" type="date" @bind="_newStartDate" />
+                </div>
+                <div class="field">
+                    <label class="field__label">تاریخ هدف پایان</label>
+                    <input class="input" type="date" @bind="_newTargetDate" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">بودجه تخمینی</label>
+                    <input class="input" type="number" step="0.01" @bind="_newBudget" />
+                </div>
+                <div class="field">
+                    <label class="field__label">واحد پول</label>
+                    <input class="input" @bind="_newCurrency" />
+                </div>
+                <div class="field">
+                    <label class="field__label">تلاش تخمینی (ساعت)</label>
+                    <input class="input" type="number" step="0.5" @bind="_newEffort" />
+                </div>
+            </div>
+            <div class="row">
+                <button class="btn btn--primary" @onclick="CreateAsync" disabled="@_busy">ثبت</button>
+                <button class="btn btn--ghost" @onclick="() => _showCreate = false">انصراف</button>
+            </div>
+        </div>
+    </section>
+}
+
+<section class="card mb-4">
+    <div class="card__body">
+        <div class="row row--wrap">
+            <div class="field mb-0" style="min-width: 180px">
+                <label class="field__label">وضعیت</label>
+                <select class="select" @bind="_statusFilter" @bind:after="ReloadAsync">
+                    <option value="">همه</option>
+                    @foreach (var s in Enum.GetValues<ProjectStatus>())
+                    {
+                        <option value="@s">@StatusLabel(s)</option>
+                    }
+                </select>
+            </div>
+            <div class="field mb-0" style="min-width: 200px">
+                <label class="field__label">حوزه زندگی</label>
+                <select class="select" @bind="_domainFilter" @bind:after="ReloadAsync">
+                    <option value="">همه حوزه‌ها</option>
+                    @foreach (var d in _domains)
+                    {
+                        <option value="@d.Id">@d.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="field mb-0" style="min-width: 150px">
+                <label class="field__label">&nbsp;</label>
+                <label class="checkbox" style="padding-top: 6px">
+                    <input type="checkbox" @bind="_includeArchived" @bind:after="ReloadAsync" />
+                    شامل بایگانی
+                </label>
+            </div>
+            <div class="spacer"></div>
+            <div class="field mb-0">
+                <label class="field__label">&nbsp;</label>
+                <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<div class="grid grid--sidebar">
+    <div class="stack">
+        @if (_projects.Count == 0)
+        {
+            <EmptyState Title="پروژه‌ای یافت نشد" Description="یک پروژه جدید بسازید یا فیلترها را تغییر دهید." />
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>نام</th>
+                            <th>حوزه</th>
+                            <th>وضعیت</th>
+                            <th>پیشرفت</th>
+                            <th>نقاط عطف</th>
+                            <th>موعد</th>
+                            <th class="actions">عملیات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in _projects)
+                        {
+                            <tr class="@(p.IsArchived ? "text-faint" : string.Empty)">
+                                <td>
+                                    <div class="row">
+                                        @if (p.IsPinned)
+                                        {
+                                            <span class="badge badge--accent">سنجاق</span>
+                                        }
+                                        <span>@p.Name</span>
+                                    </div>
+                                </td>
+                                <td class="text-muted">@(p.LifeDomainName ?? "—")</td>
+                                <td><span class="badge @StatusClass(p.Status)">@StatusLabel(p.Status)</span></td>
+                                <td style="min-width: 130px">
+                                    <ProgressBar Value="p.ProgressPercentage"
+                                                 ValueLabel="@Numbers.FormatPercent(p.ProgressPercentage, 0)" />
+                                </td>
+                                <td class="num text-muted">@p.CompletedMilestoneCount / @p.MilestoneCount</td>
+                                <td class="@(p.IsOverdue ? "text-danger" : "text-muted")">
+                                    @(p.TargetEndDate.HasValue ? Dates.FormatDate(p.TargetEndDate.Value) : "—")
+                                </td>
+                                <td class="actions">
+                                    <button class="btn btn--sm" @onclick="() => OpenAsync(p.Id)" disabled="@_busy">جزئیات</button>
+                                    <button class="btn btn--sm btn--ghost" @onclick="() => TogglePinAsync(p.Id, p.IsPinned)" disabled="@_busy">
+                                        @(p.IsPinned ? "برداشتن سنجاق" : "سنجاق")
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <div class="stack">
+        @if (_detail is null)
+        {
+            <section class="card">
+                <div class="card__header"><span class="card__title">جزئیات پروژه</span></div>
+                <div class="card__body">
+                    <p class="text-muted text-sm">یک پروژه را انتخاب کنید تا نقاط عطف و وضعیت آن را ببینید.</p>
+                </div>
+            </section>
+        }
+        else
+        {
+            var d = _detail;
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">@d.Name</span>
+                    <div class="card__actions">
+                        <button class="btn btn--sm btn--ghost" @onclick="() => _detail = null">بستن</button>
+                    </div>
+                </div>
+                <div class="card__body">
+                    @if (!string.IsNullOrWhiteSpace(d.Description))
+                    {
+                        <p class="text-sm text-muted mb-3">@d.Description</p>
+                    }
+
+                    <div class="row row--between mb-2">
+                        <span class="text-sm text-muted">پیشرفت</span>
+                        <span class="text-sm nums">@Numbers.FormatPercent(d.ProgressPercentage, 0)</span>
+                    </div>
+                    <ProgressBar Value="d.ProgressPercentage" ShowValue="false" />
+
+                    <div class="row row--between mt-3">
+                        <span class="text-sm text-muted">وضعیت</span>
+                        <span class="badge @StatusClass(d.Status)">@StatusLabel(d.Status)</span>
+                    </div>
+
+                    <div class="field mt-3">
+                        <label class="field__label">تغییر وضعیت</label>
+                        <select class="select" @bind="_newStatus">
+                            @foreach (var s in Enum.GetValues<ProjectStatus>())
+                            {
+                                <option value="@s">@StatusLabel(s)</option>
+                            }
+                        </select>
+                    </div>
+                    <button class="btn btn--sm btn--block" @onclick="ChangeStatusAsync" disabled="@_busy">
+                        اعمال وضعیت
+                    </button>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">نقاط عطف</span>
+                    <span class="card__subtitle">@d.Milestones.Count مورد</span>
+                </div>
+
+                @if (d.Milestones.Count == 0)
+                {
+                    <div class="card__body">
+                        <p class="text-muted text-sm">نقطه عطفی ثبت نشده است.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="list">
+                        @foreach (var m in d.Milestones)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@m.Name</div>
+                                    <div class="list__meta">
+                                        <span class="badge @MilestoneClass(m.Status)">@MilestoneLabel(m.Status)</span>
+                                        @if (m.DueDate.HasValue)
+                                        {
+                                            <span>@Dates.FormatDate(m.DueDate.Value)</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    @if (m.Status != MilestoneStatus.Completed)
+                                    {
+                                        <button class="btn btn--sm" @onclick="() => CompleteMilestoneAsync(m.Id)" disabled="@_busy">
+                                            تکمیل
+                                        </button>
+                                    }
+                                    <button class="btn btn--sm btn--ghost" @onclick="() => RemoveMilestoneAsync(m.Id)" disabled="@_busy">
+                                        حذف
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+
+                <div class="card__footer">
+                    <div class="field mb-2">
+                        <label class="field__label">نقطه عطف جدید</label>
+                        <input class="input" @bind="_newMilestoneName" placeholder="نام نقطه عطف" />
+                    </div>
+                    <div class="row">
+                        <input class="input" type="date" @bind="_newMilestoneDue" style="max-width: 180px" />
+                        <button class="btn btn--sm btn--primary" @onclick="AddMilestoneAsync" disabled="@_busy">افزودن</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card__header"><span class="card__title">اتصال به اهداف</span></div>
+                <div class="card__body">
+                    @if (d.LinkedGoalIds.Count == 0)
+                    {
+                        <p class="text-muted text-sm mb-3">این پروژه به هیچ هدفی متصل نیست.</p>
+                    }
+                    else
+                    {
+                        <div class="row row--wrap mb-3">
+                            @foreach (var goalId in d.LinkedGoalIds)
+                            {
+                                var goal = _goals.FirstOrDefault(g => g.Id == goalId);
+                                <span class="chip">@(goal?.Name ?? goalId.ToString())</span>
+                            }
+                        </div>
+                    }
+
+                    <div class="field mb-2">
+                        <label class="field__label">افزودن هدف</label>
+                        <select class="select" @bind="_newGoalId">
+                            <option value="">— انتخاب هدف —</option>
+                            @foreach (var g in _goals)
+                            {
+                                <option value="@g.Id">@g.Name</option>
+                            }
+                        </select>
+                    </div>
+                    <button class="btn btn--sm btn--block" @onclick="LinkGoalAsync" disabled="@_busy">اتصال</button>
+                </div>
+            </section>
+        }
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<ProjectSummary> _projects = [];
+    private IReadOnlyList<LifeDomainSummary> _domains = [];
+    private IReadOnlyList<GoalSummary> _goals = [];
+    private ProjectDetail? _detail;
+
+    private bool _busy;
+    private bool _showCreate;
+    private string? _error;
+    private string? _notice;
+
+    private string _statusFilter = string.Empty;
+    private string _domainFilter = string.Empty;
+    private bool _includeArchived;
+
+    private string _newName = string.Empty;
+    private string _newDescription = string.Empty;
+    private string _newDomainId = string.Empty;
+    private PriorityLevel _newPriority = PriorityLevel.Medium;
+    private DateTime? _newStartDate;
+    private DateTime? _newTargetDate;
+    private decimal? _newBudget;
+    private string _newCurrency = "IRR";
+    private decimal? _newEffort;
+
+    private ProjectStatus _newStatus = ProjectStatus.Planned;
+    private string _newMilestoneName = string.Empty;
+    private DateTime? _newMilestoneDue;
+    private string _newGoalId = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _domains = await Domains.ListAsync();
+        _goals = await Goals.ListAsync(new GoalFilter());
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var filter = new ProjectFilter(
+                Status: Enum.TryParse<ProjectStatus>(_statusFilter, out var status) ? status : null,
+                LifeDomainId: Guid.TryParse(_domainFilter, out var domainId) ? domainId : null,
+                IncludeArchived: _includeArchived);
+
+            _projects = await ProjectSvc.ListAsync(filter);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateProjectRequest(
+                _newName,
+                Guid.TryParse(_newDomainId, out var domainId) ? domainId : null,
+                string.IsNullOrWhiteSpace(_newDescription) ? null : _newDescription,
+                _newPriority,
+                _newStartDate.HasValue ? DateOnly.FromDateTime(_newStartDate.Value) : null,
+                _newTargetDate.HasValue ? DateOnly.FromDateTime(_newTargetDate.Value) : null,
+                _newBudget,
+                _newCurrency,
+                _newEffort,
+                null);
+
+            var result = await ProjectSvc.CreateAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "پروژه ثبت شد.";
+            _newName = string.Empty;
+            _newDescription = string.Empty;
+            _newStartDate = null;
+            _newTargetDate = null;
+            _newBudget = null;
+            _newEffort = null;
+            _showCreate = false;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OpenAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await ProjectSvc.GetAsync(id);
+            if (result.IsFailure || result.Value is null)
+            {
+                _error = result.ErrorMessage ?? "پروژه یافت نشد.";
+                return;
+            }
+
+            _detail = result.Value;
+            _newStatus = result.Value.Status;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TogglePinAsync(Guid id, bool current)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await ProjectSvc.SetPinnedAsync(id, !current);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ChangeStatusAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await ProjectSvc.ChangeStatusAsync(_detail.Id, _newStatus);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AddMilestoneAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await ProjectSvc.AddMilestoneAsync(
+                _detail.Id,
+                _newMilestoneName,
+                null,
+                _newMilestoneDue.HasValue ? DateOnly.FromDateTime(_newMilestoneDue.Value) : null);
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _newMilestoneName = string.Empty;
+            _newMilestoneDue = null;
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CompleteMilestoneAsync(Guid milestoneId)
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await ProjectSvc.ChangeMilestoneStatusAsync(_detail.Id, milestoneId, MilestoneStatus.Completed);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RemoveMilestoneAsync(Guid milestoneId)
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await ProjectSvc.RemoveMilestoneAsync(_detail.Id, milestoneId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task LinkGoalAsync()
+    {
+        if (_detail is null || !Guid.TryParse(_newGoalId, out var goalId))
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await ProjectSvc.LinkGoalAsync(_detail.Id, goalId, 100m);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _newGoalId = string.Empty;
+            await OpenAsync(_detail.Id);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string StatusLabel(ProjectStatus status) => status switch
+    {
+        ProjectStatus.Draft => "پیش‌نویس",
+        ProjectStatus.Planned => "برنامه‌ریزی‌شده",
+        ProjectStatus.Active => "فعال",
+        ProjectStatus.OnHold => "متوقف",
+        ProjectStatus.Completed => "تکمیل‌شده",
+        ProjectStatus.Cancelled => "لغو‌شده",
+        ProjectStatus.Archived => "بایگانی",
+        _ => status.ToString()
+    };
+
+    private static string StatusClass(ProjectStatus status) => status switch
+    {
+        ProjectStatus.Active => "badge--info",
+        ProjectStatus.Completed => "badge--ok",
+        ProjectStatus.Cancelled => "badge--danger",
+        ProjectStatus.OnHold => "badge--warn",
+        ProjectStatus.Archived => "badge--warn",
+        _ => string.Empty
+    };
+
+    private static string MilestoneLabel(MilestoneStatus status) => status switch
+    {
+        MilestoneStatus.Pending => "در انتظار",
+        MilestoneStatus.InProgress => "در حال انجام",
+        MilestoneStatus.Completed => "تکمیل‌شده",
+        MilestoneStatus.Missed => "از دست رفته",
+        MilestoneStatus.Cancelled => "لغو‌شده",
+        _ => status.ToString()
+    };
+
+    private static string MilestoneClass(MilestoneStatus status) => status switch
+    {
+        MilestoneStatus.Completed => "badge--ok",
+        MilestoneStatus.Missed => "badge--danger",
+        MilestoneStatus.InProgress => "badge--info",
+        MilestoneStatus.Cancelled => "badge--warn",
+        _ => string.Empty
+    };
+
+    private static string PriorityLabel(PriorityLevel priority) => priority switch
+    {
+        PriorityLevel.Critical => "بحرانی",
+        PriorityLevel.High => "بالا",
+        PriorityLevel.Medium => "متوسط",
+        PriorityLevel.Low => "پایین",
+        _ => "بدون اولویت"
+    };
+}

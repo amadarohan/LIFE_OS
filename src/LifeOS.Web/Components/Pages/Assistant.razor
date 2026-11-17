@@ -1,0 +1,720 @@
+@page "/assistant"
+@using LifeOS.Application.Ai
+@inject AiChatService ChatSvc
+@inject AiActionService ActionSvc
+@inject AiMemoryService MemorySvc
+@inject AiInsightService InsightSvc
+@inject IDateTimeFormatter Dates
+@inject INumberFormatter Numbers
+
+<PageTitle>دستیار — Life OS</PageTitle>
+
+<PageHeader Eyebrow="هوش" Title="دستیار"
+            Description="دستیار فقط پیشنهاد می‌دهد. هیچ تغییری در داده‌ها بدون تأیید صریح شما اجرا نمی‌شود.">
+    <Actions>
+        <button class="btn btn--ghost" @onclick="NewConversation" disabled="@_busy">گفتگوی جدید</button>
+        <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+<div class="grid grid--sidebar">
+    <div class="stack">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">گفتگو</span>
+                @if (_activeConversationId is not null)
+                {
+                    <span class="card__subtitle">@_messages.Count پیام</span>
+                }
+            </div>
+
+            <div class="card__body">
+                @if (_messages.Count == 0)
+                {
+                    <EmptyState Title="گفتگویی آغاز نشده"
+                                Description="پرسش خود را بنویسید. دستیار بر اساس داده‌های واقعی همین سیستم پاسخ می‌دهد." />
+                }
+                else
+                {
+                    <div class="stack">
+                        @foreach (var message in _messages)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">
+                                        <span class="badge @RoleBadgeClass(message.Role)">@RoleLabel(message.Role)</span>
+                                        @if (!string.IsNullOrWhiteSpace(message.Model))
+                                        {
+                                            <span class="text-faint text-13">@message.Model</span>
+                                        }
+                                    </div>
+                                    <div class="list__meta" style="white-space: pre-wrap">@message.Content</div>
+                                    @if (message.Sources.Count > 0)
+                                    {
+                                        <div class="list__meta text-faint">
+                                            منابع:
+                                            @string.Join("، ", message.Sources.Select(s => s.DisplayName))
+                                        </div>
+                                    }
+                                </div>
+                                <div class="list__aside nowrap text-faint text-12">
+                                    @Dates.FormatTime(message.CreatedAtUtc)
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="card__footer">
+                <div class="field">
+                    <label class="field__label">پرسش شما</label>
+                    <textarea class="textarea" rows="3" @bind="_userMessage"
+                              placeholder="مثلاً: این هفته واقعاً چه چیزی عقب افتاده است؟"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">نقش دستیار</label>
+                        <select class="select" @bind="_profileKey">
+                            @foreach (var profile in AiPromptProfiles.All)
+                            {
+                                <option value="@profile.Key">@profile.DisplayName</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="field__label">سرویس</label>
+                        <select class="select" @bind="_providerId">
+                            <option value="">خودکار</option>
+                            <option value="local">مدل محلی</option>
+                            <option value="cloud">مدل ابری</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="field__label">&nbsp;</label>
+                        <label class="checkbox" style="padding-top: 6px">
+                            <input type="checkbox" @bind="_includeFinance" />
+                            شامل داده مالی
+                        </label>
+                    </div>
+                    <div class="field">
+                        <label class="field__label">&nbsp;</label>
+                        <label class="checkbox" style="padding-top: 6px">
+                            <input type="checkbox" @bind="_includeJournal" />
+                            شامل یادداشت‌های روزانه
+                        </label>
+                    </div>
+                </div>
+                <div class="row">
+                    <button class="btn btn--primary" @onclick="SendAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_userMessage))">
+                        @(_busy ? "در حال پردازش…" : "ارسال")
+                    </button>
+                    @if (_lastRoutingReason is not null)
+                    {
+                        <span class="text-faint text-12">@_lastRoutingReason</span>
+                    }
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">پیشنهادهای در انتظار تأیید</span>
+                <span class="card__subtitle">@_pendingActions.Count مورد</span>
+            </div>
+            <div class="card__body">
+                @if (_pendingActions.Count == 0)
+                {
+                    <p class="text-muted text-13 mb-0">پیشنهاد در انتظار تأییدی وجود ندارد.</p>
+                }
+                else
+                {
+                    <div class="stack">
+                        @foreach (var action in _pendingActions)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@action.Description</div>
+                                    <div class="list__meta">
+                                        <span class="badge badge--accent">@ActionTypeLabel(action.ActionType)</span>
+                                        @if (action.ExpiresAtUtc is { } expires)
+                                        {
+                                            <span>اعتبار تا @Dates.FormatDateTime(expires)</span>
+                                        }
+                                        @if (action.IsExpired)
+                                        {
+                                            <span class="badge badge--danger">منقضی</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    <button class="btn btn--sm btn--primary"
+                                            @onclick="() => ApproveAsync(action.Id)"
+                                            disabled="@(_busy || !action.CanBeApproved)">
+                                        تأیید
+                                    </button>
+                                    <button class="btn btn--sm btn--ghost"
+                                            @onclick="() => RejectAsync(action.Id)"
+                                            disabled="@_busy">
+                                        رد
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">تأییدشده — آماده اجرا</span>
+                <span class="card__subtitle">@_approvedActions.Count مورد</span>
+            </div>
+            <div class="card__body">
+                @if (_approvedActions.Count == 0)
+                {
+                    <p class="text-muted text-13 mb-0">مورد تأییدشده‌ای در انتظار اجرا نیست.</p>
+                }
+                else
+                {
+                    <div class="stack">
+                        @foreach (var action in _approvedActions)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@action.Description</div>
+                                    <div class="list__meta">
+                                        <span class="badge badge--warn">@ActionTypeLabel(action.ActionType)</span>
+                                        @if (action.ApprovedAtUtc is { } approved)
+                                        {
+                                            <span>تأیید در @Dates.FormatDateTime(approved)</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    <button class="btn btn--sm btn--primary"
+                                            @onclick="() => ExecuteAsync(action.Id)"
+                                            disabled="@(_busy || !action.CanBeExecuted)">
+                                        اجرا
+                                    </button>
+                                    <button class="btn btn--sm btn--ghost"
+                                            @onclick="() => CancelAsync(action.Id)"
+                                            disabled="@_busy">
+                                        لغو
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </section>
+    </div>
+
+    <div class="stack">
+        <section class="card">
+            <div class="card__header"><span class="card__title">گفتگوهای اخیر</span></div>
+            <div class="card__body">
+                @if (_conversations.Count == 0)
+                {
+                    <p class="text-muted text-13 mb-0">گفتگویی ثبت نشده است.</p>
+                }
+                else
+                {
+                    <div class="stack">
+                        @foreach (var conversation in _conversations)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title truncate">@conversation.Title</div>
+                                    <div class="list__meta">
+                                        <span>@Numbers.Format(conversation.MessageCount) پیام</span>
+                                        <span>@Dates.FormatDateTime(conversation.UpdatedAtUtc)</span>
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    <button class="btn btn--sm btn--ghost"
+                                            @onclick="() => OpenConversationAsync(conversation.Id)"
+                                            disabled="@_busy">
+                                        باز
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">بینش‌ها</span>
+                <span class="card__subtitle">@_insights.Count مورد</span>
+            </div>
+            <div class="card__body">
+                @if (_insights.Count == 0)
+                {
+                    <p class="text-muted text-13 mb-0">بینشی ثبت نشده است.</p>
+                }
+                else
+                {
+                    <div class="stack">
+                        @foreach (var insight in _insights)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@insight.Title</div>
+                                    <div class="list__meta" style="white-space: pre-wrap">@insight.Description</div>
+                                    <div class="list__meta">
+                                        <span class="badge @SeverityBadgeClass(insight.Severity)">@SeverityLabel(insight.Severity)</span>
+                                        <span>اطمینان @Numbers.FormatPercent(insight.Confidence * 100, 0)</span>
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    @if (insight.Status == AiInsightStatus.New)
+                                    {
+                                        <button class="btn btn--sm btn--ghost"
+                                                @onclick="() => AcknowledgeInsightAsync(insight.Id)"
+                                                disabled="@_busy">
+                                            دیدم
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge">@InsightStatusLabel(insight.Status)</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">حافظه دستیار</span>
+                <span class="card__subtitle">@_memories.Count مورد</span>
+            </div>
+            <div class="card__body">
+                @if (_memories.Count == 0)
+                {
+                    <p class="text-muted text-13 mb-0">چیزی در حافظه ثبت نشده است.</p>
+                }
+                else
+                {
+                    <div class="stack">
+                        @foreach (var memory in _memories)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title" style="white-space: pre-wrap">@memory.Content</div>
+                                    <div class="list__meta">
+                                        <span class="badge">@MemoryTypeLabel(memory.MemoryType)</span>
+                                        <span>اطمینان @Numbers.FormatPercent(memory.Confidence * 100, 0)</span>
+                                        @if (memory.IsValidated)
+                                        {
+                                            <span class="badge badge--ok">تأییدشده</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge badge--warn">تأییدنشده</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    @if (!memory.IsValidated)
+                                    {
+                                        <button class="btn btn--sm btn--ghost"
+                                                @onclick="() => ValidateMemoryAsync(memory.Id)"
+                                                disabled="@_busy">
+                                            تأیید
+                                        </button>
+                                    }
+                                    <button class="btn btn--sm btn--ghost"
+                                            @onclick="() => DeactivateMemoryAsync(memory.Id)"
+                                            disabled="@_busy">
+                                        غیرفعال
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    private bool _busy;
+    private string? _error;
+    private string? _notice;
+    private string? _lastRoutingReason;
+
+    private Guid? _activeConversationId;
+    private string _userMessage = string.Empty;
+    private string _profileKey = AiPromptProfiles.LifeAnalyst;
+    private string _providerId = string.Empty;
+    private bool _includeFinance;
+    private bool _includeJournal;
+
+    private IReadOnlyList<AiConversationSummary> _conversations = [];
+    private IReadOnlyList<AiMessageView> _messages = [];
+    private IReadOnlyList<AiActionView> _pendingActions = [];
+    private IReadOnlyList<AiActionView> _approvedActions = [];
+    private IReadOnlyList<AiInsightView> _insights = [];
+    private IReadOnlyList<AiMemoryView> _memories = [];
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _conversations = await ChatSvc.ListConversationsAsync();
+            _pendingActions = await ActionSvc.ListPendingAsync();
+            _approvedActions = await ActionSvc.ListAsync(AiActionStatus.Approved);
+            _insights = await InsightSvc.ListAsync(AiInsightStatus.New);
+            _memories = await MemorySvc.ListAsync();
+
+            if (_activeConversationId is { } id)
+            {
+                _messages = await ChatSvc.GetMessagesAsync(id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void NewConversation()
+    {
+        _activeConversationId = null;
+        _messages = [];
+        _userMessage = string.Empty;
+        _lastRoutingReason = null;
+        _notice = null;
+        _error = null;
+    }
+
+    private async Task OpenConversationAsync(Guid conversationId)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _activeConversationId = conversationId;
+            _messages = await ChatSvc.GetMessagesAsync(conversationId);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SendAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_userMessage))
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new AiChatRequest(
+                _activeConversationId,
+                _userMessage,
+                _profileKey,
+                ExplicitProviderId: string.IsNullOrWhiteSpace(_providerId) ? null : _providerId,
+                IncludeFinance: _includeFinance,
+                IncludeJournal: _includeJournal);
+
+            var result = await ChatSvc.SendAsync(request);
+
+            if (result.IsFailure || result.Value is null)
+            {
+                _error = result.ErrorMessage ?? "ارسال پیام ناموفق بود.";
+                return;
+            }
+
+            var reply = result.Value;
+            _activeConversationId = reply.ConversationId;
+            _lastRoutingReason = reply.RoutingReason;
+            _userMessage = string.Empty;
+
+            if (reply.InputWasFlagged)
+            {
+                _notice = "بخشی از متن شما به‌عنوان تلاش برای تغییر دستورها شناسایی و پاک‌سازی شد.";
+            }
+
+            _messages = await ChatSvc.GetMessagesAsync(reply.ConversationId);
+            _conversations = await ChatSvc.ListConversationsAsync();
+            _pendingActions = await ActionSvc.ListPendingAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ApproveAsync(Guid actionId)
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await ActionSvc.ApproveAsync(actionId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "پیشنهاد تأیید شد. برای اعمال تغییر، دکمه اجرا را بزنید.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RejectAsync(Guid actionId)
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await ActionSvc.RejectAsync(actionId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "پیشنهاد رد شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CancelAsync(Guid actionId)
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await ActionSvc.CancelAsync(actionId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "پیشنهاد لغو شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ExecuteAsync(Guid actionId)
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await ActionSvc.ExecuteAsync(actionId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "تغییر با موفقیت اعمال شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AcknowledgeInsightAsync(Guid insightId)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await InsightSvc.ChangeStatusAsync(insightId, AiInsightStatus.Acknowledged);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _insights = await InsightSvc.ListAsync(AiInsightStatus.New);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ValidateMemoryAsync(Guid memoryId)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await MemorySvc.ValidateAsync(memoryId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _memories = await MemorySvc.ListAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeactivateMemoryAsync(Guid memoryId)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await MemorySvc.DeactivateAsync(memoryId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _memories = await MemorySvc.ListAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string RoleLabel(AiMessageRole role) => role switch
+    {
+        AiMessageRole.User => "شما",
+        AiMessageRole.Assistant => "دستیار",
+        AiMessageRole.System => "سیستم",
+        AiMessageRole.Tool => "ابزار",
+        _ => role.ToString()
+    };
+
+    private static string RoleBadgeClass(AiMessageRole role) => role switch
+    {
+        AiMessageRole.User => "badge--info",
+        AiMessageRole.Assistant => "badge--accent",
+        _ => string.Empty
+    };
+
+    private static string ActionTypeLabel(AiActionType actionType) => actionType switch
+    {
+        AiActionType.CreateProject => "ایجاد پروژه",
+        AiActionType.UpdateProject => "ویرایش پروژه",
+        AiActionType.CreateTask => "ایجاد کار",
+        AiActionType.UpdateTask => "ویرایش کار",
+        AiActionType.CreateGoal => "ایجاد هدف",
+        AiActionType.UpdateGoal => "ویرایش هدف",
+        AiActionType.CreateDecision => "ثبت تصمیم",
+        AiActionType.SaveWeeklyPlan => "ذخیره برنامه هفته",
+        AiActionType.RecordFinancialTransaction => "ثبت تراکنش",
+        AiActionType.ReorganizeTasks => "بازآرایی کارها",
+        AiActionType.AdjustBudget => "اصلاح بودجه",
+        _ => actionType.ToString()
+    };
+
+    private static string SeverityLabel(ImportanceLevel severity) => severity switch
+    {
+        ImportanceLevel.Low => "کم",
+        ImportanceLevel.Medium => "متوسط",
+        ImportanceLevel.High => "زیاد",
+        ImportanceLevel.Critical => "بحرانی",
+        _ => severity.ToString()
+    };
+
+    private static string SeverityBadgeClass(ImportanceLevel severity) => severity switch
+    {
+        ImportanceLevel.Critical => "badge--danger",
+        ImportanceLevel.High => "badge--warn",
+        ImportanceLevel.Medium => "badge--info",
+        _ => string.Empty
+    };
+
+    private static string InsightStatusLabel(AiInsightStatus status) => status switch
+    {
+        AiInsightStatus.New => "جدید",
+        AiInsightStatus.Acknowledged => "دیده‌شده",
+        AiInsightStatus.Dismissed => "رد‌شده",
+        AiInsightStatus.Resolved => "حل‌شده",
+        AiInsightStatus.Expired => "منقضی",
+        _ => status.ToString()
+    };
+
+    private static string MemoryTypeLabel(AiMemoryType memoryType) => memoryType switch
+    {
+        AiMemoryType.Profile => "پروفایل",
+        AiMemoryType.Episodic => "رویدادی",
+        AiMemoryType.Operational => "عملیاتی",
+        _ => memoryType.ToString()
+    };
+}

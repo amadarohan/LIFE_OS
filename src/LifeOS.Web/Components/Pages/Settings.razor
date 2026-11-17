@@ -1,0 +1,220 @@
+@page "/settings"
+@using LifeOS.Application.UseCases.Settings
+@inject SettingsService SettingsSvc
+
+<PageTitle>تنظیمات — Life OS</PageTitle>
+
+<PageHeader Eyebrow="سیستم" Title="تنظیمات"
+            Description="مقادیر حساس رمزنگاری‌شده ذخیره می‌شوند و هرگز به‌صورت متن روشن بازگردانده نمی‌شوند.">
+    <Actions>
+        <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+<div class="grid grid--sidebar">
+    <section class="card">
+        <div class="card__header">
+            <span class="card__title">تنظیمات ثبت‌شده</span>
+            <span class="card__subtitle">@_settings.Count مورد</span>
+        </div>
+
+        @if (_settings.Count == 0)
+        {
+            <EmptyState Title="تنظیمی ثبت نشده" Description="مقادیر پیش‌فرض هنگام راه‌اندازی برنامه ساخته می‌شوند." />
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>کلید</th>
+                            <th>مقدار</th>
+                            <th>نوع</th>
+                            <th class="actions">عملیات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var s in _settings)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="nums">@s.Key</div>
+                                    @if (!string.IsNullOrWhiteSpace(s.Description))
+                                    {
+                                        <div class="text-faint text-sm">@s.Description</div>
+                                    }
+                                </td>
+                                <td>
+                                    @if (s.IsSensitive)
+                                    {
+                                        <span class="badge badge--warn">حساس</span>
+                                        <span class="nums text-muted">@s.Value</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="nums">@(string.IsNullOrEmpty(s.Value) ? "—" : s.Value)</span>
+                                    }
+                                </td>
+                                <td class="text-muted nums">@s.ValueType</td>
+                                <td class="actions">
+                                    <button class="btn btn--sm btn--ghost" @onclick="@(() => StartEdit(s))" disabled="@_busy">ویرایش</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="card">
+        <div class="card__header">
+            <span class="card__title">@(_editingKey is null ? "تنظیم جدید" : "ویرایش تنظیم")</span>
+        </div>
+        <div class="card__body">
+            <div class="field">
+                <label class="field__label">کلید</label>
+                <input class="input nums" @bind="_key" readonly="@(_editingKey is not null)" />
+            </div>
+            <div class="field">
+                <label class="field__label">مقدار</label>
+                <input class="input" @bind="_value" placeholder="@(_isSensitive ? "مقدار جدید (خالی = بدون تغییر)" : "")" />
+            </div>
+            <div class="field">
+                <label class="field__label">نوع</label>
+                <select class="select" @bind="_valueType">
+                    <option value="string">string</option>
+                    <option value="int">int</option>
+                    <option value="decimal">decimal</option>
+                    <option value="bool">bool</option>
+                </select>
+            </div>
+            <div class="field">
+                <label class="field__label">توضیح</label>
+                <input class="input" @bind="_description" />
+            </div>
+            <label class="checkbox mb-3">
+                <input type="checkbox" @bind="_isSensitive" />
+                مقدار حساس است (رمزنگاری‌شده ذخیره می‌شود)
+            </label>
+
+            <div class="row row--wrap">
+                <button class="btn btn--primary" @onclick="SaveAsync" disabled="@_busy">ذخیره</button>
+                @if (_editingKey is not null)
+                {
+                    <button class="btn btn--ghost" @onclick="CancelEdit" disabled="@_busy">انصراف</button>
+                }
+            </div>
+        </div>
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<SettingView> _settings = [];
+
+    private bool _busy;
+    private string? _error;
+    private string? _notice;
+
+    private string? _editingKey;
+    private string _key = string.Empty;
+    private string _value = string.Empty;
+    private string _valueType = "string";
+    private string _description = string.Empty;
+    private bool _isSensitive;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _settings = await SettingsSvc.ListAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void StartEdit(SettingView setting)
+    {
+        _editingKey = setting.Key;
+        _key = setting.Key;
+        _value = string.Empty;
+        _valueType = setting.ValueType;
+        _description = setting.Description ?? string.Empty;
+        _isSensitive = setting.IsSensitive;
+    }
+
+    private void CancelEdit()
+    {
+        _editingKey = null;
+        _key = string.Empty;
+        _value = string.Empty;
+        _valueType = "string";
+        _description = string.Empty;
+        _isSensitive = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_key))
+        {
+            _error = "کلید تنظیمات الزامی است.";
+            return;
+        }
+
+        // A masked sensitive value must never be written back as if it were the real secret.
+        if (_editingKey is not null && _isSensitive && string.IsNullOrEmpty(_value))
+        {
+            _error = "برای تغییر یک مقدار حساس، مقدار جدید را وارد کنید.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await SettingsSvc.SetValueAsync(
+                _key,
+                _value,
+                _valueType,
+                string.IsNullOrWhiteSpace(_description) ? null : _description,
+                _isSensitive);
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "تنظیم ذخیره شد.";
+            CancelEdit();
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

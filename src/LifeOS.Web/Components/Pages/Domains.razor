@@ -1,0 +1,473 @@
+@page "/domains"
+@using LifeOS.Application.UseCases.LifeDomains
+@inject LifeDomainService DomainSvc
+@inject INumberFormatter Numbers
+@inject IDateTimeFormatter Dates
+
+<PageTitle>حوزه‌های زندگی — Life OS</PageTitle>
+
+<PageHeader Eyebrow="جهت‌گیری" Title="حوزه‌های زندگی"
+            Description="حوزه‌ها بالاترین سطح هم‌راستایی هستند: هر پروژه و هر هدف به یک حوزه اشاره می‌کند. حذف وجود ندارد؛ حوزه غیرفعال می‌شود تا تاریخچه سالم بماند.">
+    <Actions>
+        <button class="btn btn--primary" @onclick="() => _showCreate = !_showCreate">
+            @(_showCreate ? "بستن" : "حوزه جدید")
+        </button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+@if (_showCreate)
+{
+    <section class="card mb-4">
+        <div class="card__header"><span class="card__title">ثبت حوزه جدید</span></div>
+        <div class="card__body">
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">نام</label>
+                    <input class="input" @bind="_newName" />
+                </div>
+                <div class="field">
+                    <label class="field__label">ترتیب نمایش</label>
+                    <input class="input" type="number" @bind="_newSortOrder" />
+                </div>
+            </div>
+            <div class="field">
+                <label class="field__label">توضیح</label>
+                <textarea class="textarea" @bind="_newDescription"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="field">
+                    <label class="field__label">رنگ</label>
+                    <input class="input" @bind="_newColor" placeholder="#8c1f2b" />
+                </div>
+                <div class="field">
+                    <label class="field__label">آیکون</label>
+                    <input class="input" @bind="_newIcon" placeholder="circle" />
+                </div>
+            </div>
+            <div class="row">
+                <button class="btn btn--primary" @onclick="CreateAsync" disabled="@_busy">ثبت</button>
+                <button class="btn btn--ghost" @onclick="() => _showCreate = false">انصراف</button>
+            </div>
+        </div>
+    </section>
+}
+
+<div class="grid grid--sidebar">
+    <div class="stack">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">حوزه‌ها</span>
+                <div class="card__actions">
+                    <label class="checkbox">
+                        <input type="checkbox" @bind="_includeInactive" @bind:after="ReloadAsync" />
+                        شامل غیرفعال‌ها
+                    </label>
+                </div>
+            </div>
+
+            @if (_domains.Count == 0)
+            {
+                <EmptyState Title="حوزه‌ای ثبت نشده" Description="با «حوزه جدید» اولین حوزه زندگی خود را بسازید." />
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>نام</th>
+                                <th class="num">پروژه</th>
+                                <th class="num">هدف</th>
+                                <th class="num">سنجه</th>
+                                <th>وضعیت</th>
+                                <th class="actions">عملیات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var d in _domains)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="row">
+                                            <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:@d.Color"></span>
+                                            <span>@d.Name</span>
+                                        </div>
+                                    </td>
+                                    <td class="num text-muted">@Numbers.Format(d.ProjectCount)</td>
+                                    <td class="num text-muted">@Numbers.Format(d.GoalCount)</td>
+                                    <td class="num text-muted">@Numbers.Format(d.MetricCount)</td>
+                                    <td>
+                                        <span class="badge @(d.IsActive ? "badge--ok" : "badge--warn")">
+                                            @(d.IsActive ? "فعال" : "غیرفعال")
+                                        </span>
+                                    </td>
+                                    <td class="actions">
+                                        <button class="btn btn--sm" @onclick="() => OpenAsync(d.Id)" disabled="@_busy">جزئیات</button>
+                                        <button class="btn btn--sm btn--ghost" @onclick="() => ToggleActiveAsync(d.Id, d.IsActive)" disabled="@_busy">
+                                            @(d.IsActive ? "غیرفعال" : "فعال")
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </div>
+
+    <div class="stack">
+        @if (_detail is null)
+        {
+            <section class="card">
+                <div class="card__header"><span class="card__title">سنجه‌های حوزه</span></div>
+                <div class="card__body">
+                    <p class="text-muted text-sm">یک حوزه را انتخاب کنید تا سنجه‌های آن را ببینید و مقدار جدید ثبت کنید.</p>
+                </div>
+            </section>
+        }
+        else
+        {
+            var d = _detail;
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">@d.Name</span>
+                    <div class="card__actions">
+                        <button class="btn btn--sm btn--ghost" @onclick="() => _detail = null">بستن</button>
+                    </div>
+                </div>
+                <div class="card__body">
+                    @if (!string.IsNullOrWhiteSpace(d.Description))
+                    {
+                        <p class="text-sm text-muted">@d.Description</p>
+                    }
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">سنجه‌ها</span>
+                    <span class="card__subtitle">@d.Metrics.Count مورد</span>
+                </div>
+
+                @if (d.Metrics.Count == 0)
+                {
+                    <div class="card__body">
+                        <p class="text-muted text-sm">سنجه‌ای ثبت نشده است.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="list">
+                        @foreach (var m in d.Metrics)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@m.Name</div>
+                                    <div class="list__meta">
+                                        <span class="nums">@Numbers.Format(m.CurrentValue, 1) / @Numbers.Format(m.TargetValue, 1) @m.Unit</span>
+                                        @if (m.LastMeasuredAtUtc.HasValue)
+                                        {
+                                            <span>@Dates.FormatDateTime(m.LastMeasuredAtUtc.Value)</span>
+                                        }
+                                    </div>
+                                    @if (m.ProgressPercentage.HasValue)
+                                    {
+                                        <div class="mt-2">
+                                            <ProgressBar Value="m.ProgressPercentage.Value" ShowValue="false" />
+                                        </div>
+                                    }
+                                </div>
+                                <div class="list__aside">
+                                    <input class="input" type="number" step="0.01" style="max-width: 110px"
+                                           @bind="_metricValues[m.Id]" />
+                                    <button class="btn btn--sm" @onclick="() => RecordMetricAsync(m.Id)" disabled="@_busy">
+                                        ثبت
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+
+                <div class="card__footer">
+                    <div class="field mb-2">
+                        <label class="field__label">سنجه جدید</label>
+                        <input class="input" @bind="_newMetricName" placeholder="نام سنجه" />
+                    </div>
+                    <div class="form-row">
+                        <div class="field">
+                            <label class="field__label">واحد</label>
+                            <input class="input" @bind="_newMetricUnit" placeholder="مثلاً ساعت" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">مقدار فعلی</label>
+                            <input class="input" type="number" step="0.01" @bind="_newMetricCurrent" />
+                        </div>
+                        <div class="field">
+                            <label class="field__label">مقدار هدف</label>
+                            <input class="input" type="number" step="0.01" @bind="_newMetricTarget" />
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="field">
+                            <label class="field__label">نوع سنجه</label>
+                            <select class="select" @bind="_newMetricType">
+                                @foreach (var t in Enum.GetValues<MetricType>())
+                                {
+                                    <option value="@t">@MetricTypeLabel(t)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label class="field__label">تناوب اندازه‌گیری</label>
+                            <select class="select" @bind="_newMetricFrequency">
+                                @foreach (var f in Enum.GetValues<MeasurementFrequency>())
+                                {
+                                    <option value="@f">@FrequencyLabel(f)</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                    <button class="btn btn--sm btn--primary btn--block" @onclick="AddMetricAsync" disabled="@_busy">
+                        افزودن سنجه
+                    </button>
+                </div>
+            </section>
+        }
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<LifeDomainSummary> _domains = [];
+    private LifeDomainDetail? _detail;
+    private readonly Dictionary<Guid, decimal> _metricValues = [];
+
+    private bool _busy;
+    private bool _showCreate;
+    private bool _includeInactive;
+    private string? _error;
+    private string? _notice;
+
+    private string _newName = string.Empty;
+    private string _newDescription = string.Empty;
+    private string _newColor = "#8c1f2b";
+    private string _newIcon = "circle";
+    private int _newSortOrder;
+
+    private string _newMetricName = string.Empty;
+    private string _newMetricUnit = string.Empty;
+    private decimal _newMetricCurrent;
+    private decimal _newMetricTarget = 100m;
+    private MetricType _newMetricType = MetricType.Number;
+    private MeasurementFrequency _newMetricFrequency = MeasurementFrequency.Monthly;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _domains = await DomainSvc.ListAsync(_includeInactive);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateLifeDomainRequest(
+                _newName,
+                string.IsNullOrWhiteSpace(_newDescription) ? null : _newDescription,
+                _newColor,
+                _newIcon,
+                _newSortOrder);
+
+            var result = await DomainSvc.CreateAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "حوزه ثبت شد.";
+            _newName = string.Empty;
+            _newDescription = string.Empty;
+            _newSortOrder = 0;
+            _showCreate = false;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OpenAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await DomainSvc.GetAsync(id);
+            if (result.IsFailure || result.Value is null)
+            {
+                _error = result.ErrorMessage ?? "حوزه یافت نشد.";
+                return;
+            }
+
+            _detail = result.Value;
+
+            _metricValues.Clear();
+            foreach (var m in result.Value.Metrics)
+            {
+                _metricValues[m.Id] = m.CurrentValue;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleActiveAsync(Guid id, bool current)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await DomainSvc.SetActiveAsync(id, !current);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AddMetricAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var request = new AddMetricRequest(
+                _detail.Id,
+                _newMetricName,
+                null,
+                _newMetricUnit,
+                _newMetricCurrent,
+                _newMetricTarget,
+                _newMetricType,
+                _newMetricFrequency);
+
+            var result = await DomainSvc.AddMetricAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _newMetricName = string.Empty;
+            _newMetricUnit = string.Empty;
+            _newMetricCurrent = 0m;
+            _newMetricTarget = 100m;
+
+            await OpenAsync(_detail.Id);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RecordMetricAsync(Guid metricId)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var value = _metricValues.TryGetValue(metricId, out var v) ? v : 0m;
+            var result = await DomainSvc.RecordMetricAsync(metricId, value);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            if (_detail is not null)
+            {
+                await OpenAsync(_detail.Id);
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string MetricTypeLabel(MetricType type) => type switch
+    {
+        MetricType.Number => "عددی",
+        MetricType.Currency => "مالی",
+        MetricType.Percentage => "درصدی",
+        MetricType.Duration => "مدت زمان",
+        MetricType.Boolean => "بله/خیر",
+        _ => type.ToString()
+    };
+
+    private static string FrequencyLabel(MeasurementFrequency frequency) => frequency switch
+    {
+        MeasurementFrequency.Daily => "روزانه",
+        MeasurementFrequency.Weekly => "هفتگی",
+        MeasurementFrequency.Monthly => "ماهانه",
+        MeasurementFrequency.Quarterly => "فصلی",
+        MeasurementFrequency.Yearly => "سالانه",
+        MeasurementFrequency.AdHoc => "موردی",
+        _ => frequency.ToString()
+    };
+}

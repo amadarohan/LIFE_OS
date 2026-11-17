@@ -1,0 +1,299 @@
+@page "/backup"
+@using LifeOS.Application.UseCases.Backup
+@inject BackupService BackupSvc
+@inject IDateTimeFormatter Dates
+@inject INumberFormatter Numbers
+
+<PageTitle>پشتیبان‌گیری — Life OS</PageTitle>
+
+<PageHeader Eyebrow="سیستم" Title="پشتیبان‌گیری"
+            Description="بازیابی فقط با تأیید دقیق نام فایل انجام می‌شود و پیش از هر بازیابی یک نسخه ایمن از وضعیت فعلی گرفته می‌شود.">
+    <Actions>
+        <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+<div class="grid grid--sidebar">
+    <section class="card">
+        <div class="card__header">
+            <span class="card__title">نسخه‌های پشتیبان</span>
+            <span class="card__subtitle">@_backups.Count مورد</span>
+        </div>
+
+        @if (_backups.Count == 0)
+        {
+            <EmptyState Title="نسخه پشتیبانی وجود ندارد" Description="اولین نسخه پشتیبان را از پنل کنار بسازید." />
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>فایل</th>
+                            <th>نوع</th>
+                            <th>تاریخ</th>
+                            <th class="num">حجم</th>
+                            <th>وضعیت</th>
+                            <th class="actions">عملیات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var b in _backups)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="nums">@b.FileName</div>
+                                    @if (!string.IsNullOrWhiteSpace(b.ErrorMessage))
+                                    {
+                                        <div class="text-danger text-sm">@b.ErrorMessage</div>
+                                    }
+                                </td>
+                                <td class="text-muted">@BackupTypeLabel(b.BackupType)</td>
+                                <td class="text-muted">@Dates.FormatDateTime(b.CreatedAtUtc)</td>
+                                <td class="num text-muted">@FormatSize(b.FileSizeBytes)</td>
+                                <td><span class="badge @StatusClass(b.Status)">@StatusLabel(b.Status)</span></td>
+                                <td class="actions">
+                                    @if (b.Status == BackupStatus.Completed)
+                                    {
+                                        <button class="btn btn--sm btn--ghost" @onclick="@(() => StartRestore(b))" disabled="@_busy">بازیابی</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <div class="stack">
+        <section class="card">
+            <div class="card__header"><span class="card__title">نسخه پشتیبان جدید</span></div>
+            <div class="card__body">
+                <p class="text-muted text-sm">
+                    یک نسخه کامل از پایگاه داده گرفته می‌شود. این عملیات ممکن است چند لحظه طول بکشد.
+                </p>
+                <button class="btn btn--primary btn--block" @onclick="CreateBackupAsync" disabled="@_busy">
+                    @(_busy ? "در حال اجرا…" : "تهیه نسخه پشتیبان")
+                </button>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">پاک‌سازی نسخه‌های قدیمی</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">تعداد نسخه‌های نگهداری‌شده</label>
+                    <input class="input" type="number" min="1" @bind="_keepCount" />
+                </div>
+                <p class="text-muted text-sm">
+                    نسخه‌های تکمیل‌شده قدیمی‌تر حذف می‌شوند. نسخه‌های ناقص دست‌نخورده می‌مانند.
+                </p>
+                <button class="btn btn--block" @onclick="PruneAsync" disabled="@_busy">پاک‌سازی</button>
+            </div>
+        </section>
+
+        @if (_restoreTarget is not null)
+        {
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">تأیید بازیابی</span>
+                    <div class="card__actions">
+                        <button class="btn btn--sm btn--ghost" @onclick="CancelRestore" disabled="@_busy">انصراف</button>
+                    </div>
+                </div>
+                <div class="card__body">
+                    <AlertBanner Kind="warn" Title="هشدار"
+                                Message="بازیابی، پایگاه داده فعلی را با این نسخه جایگزین می‌کند. پیش از آن یک نسخه ایمن به‌طور خودکار گرفته می‌شود." />
+                    <div class="field">
+                        <label class="field__label">برای تأیید، نام فایل را دقیقاً وارد کنید</label>
+                        <input class="input nums" @bind="_restoreConfirmation" placeholder="@_restoreTarget.FileName" />
+                    </div>
+                    <div class="text-faint text-sm mb-3 nums">@_restoreTarget.FileName</div>
+                    <button class="btn btn--danger btn--block" @onclick="ConfirmRestoreAsync" disabled="@_busy">
+                        بازیابی پایگاه داده
+                    </button>
+                </div>
+            </section>
+        }
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<BackupView> _backups = [];
+
+    private bool _busy;
+    private string? _error;
+    private string? _notice;
+
+    private int _keepCount = 10;
+
+    private BackupView? _restoreTarget;
+    private string _restoreConfirmation = string.Empty;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _backups = await BackupSvc.ListAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateBackupAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await BackupSvc.CreateBackupAsync(BackupType.Manual);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "نسخه پشتیبان با موفقیت ساخته شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task PruneAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await BackupSvc.PruneAsync(_keepCount);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = $"{Numbers.Format(result.Value)} نسخه قدیمی حذف شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void StartRestore(BackupView backup)
+    {
+        _restoreTarget = backup;
+        _restoreConfirmation = string.Empty;
+        _error = null;
+        _notice = null;
+    }
+
+    private void CancelRestore()
+    {
+        _restoreTarget = null;
+        _restoreConfirmation = string.Empty;
+    }
+
+    private async Task ConfirmRestoreAsync()
+    {
+        if (_restoreTarget is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await BackupSvc.RestoreAsync(_restoreTarget.Id, _restoreConfirmation);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "بازیابی انجام شد.";
+            CancelRestore();
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes <= 0)
+        {
+            return "—";
+        }
+
+        const double kb = 1024d;
+        const double mb = kb * 1024d;
+        const double gb = mb * 1024d;
+
+        return bytes switch
+        {
+            >= (long)gb => $"{bytes / gb:0.0} GB",
+            >= (long)mb => $"{bytes / mb:0.0} MB",
+            >= (long)kb => $"{bytes / kb:0.0} KB",
+            _ => $"{bytes} B"
+        };
+    }
+
+    private static string BackupTypeLabel(BackupType type) => type switch
+    {
+        BackupType.Manual => "دستی",
+        BackupType.Scheduled => "زمان‌بندی‌شده",
+        BackupType.PreRestore => "پیش از بازیابی",
+        _ => type.ToString()
+    };
+
+    private static string StatusLabel(BackupStatus status) => status switch
+    {
+        BackupStatus.InProgress => "در جریان",
+        BackupStatus.Completed => "تکمیل‌شده",
+        BackupStatus.Failed => "ناموفق",
+        _ => status.ToString()
+    };
+
+    private static string StatusClass(BackupStatus status) => status switch
+    {
+        BackupStatus.Completed => "badge--ok",
+        BackupStatus.Failed => "badge--danger",
+        _ => "badge--info"
+    };
+}

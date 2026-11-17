@@ -1,0 +1,30 @@
+@* Thin progress bar with an optional numeric label. *@
+
+<div class="progress-row">
+    <div class="progress">
+        <div class="progress__bar @ToneClass" style="width: @(Clamped)%"></div>
+    </div>
+    @if (ShowValue)
+    {
+        <span class="progress-row__value">@ValueLabel</span>
+    }
+</div>
+
+@code {
+    [Parameter] public decimal Value { get; set; }
+    [Parameter] public bool ShowValue { get; set; } = true;
+    [Parameter] public string? ValueLabel { get; set; }
+
+    /// <summary>accent | ok | warn | danger</summary>
+    [Parameter] public string Tone { get; set; } = "accent";
+
+    private decimal Clamped => Math.Clamp(Value, 0m, 100m);
+
+    private string ToneClass => Tone switch
+    {
+        "ok" => "progress__bar--ok",
+        "warn" => "progress__bar--warn",
+        "danger" => "progress__bar--danger",
+        _ => string.Empty
+    };
+}

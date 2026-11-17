@@ -1,0 +1,17 @@
+<Project>
+
+  <!--
+    Single source of truth for product versioning across all projects.
+    Bump these values (and tag the release) when shipping a new version.
+  -->
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>LifeOS</Product>
+    <Company>LifeOS</Company>
+    <Authors>LifeOS</Authors>
+    <Copyright>Copyright (c) 2026 LifeOS</Copyright>
+  </PropertyGroup>
+
+</Project>

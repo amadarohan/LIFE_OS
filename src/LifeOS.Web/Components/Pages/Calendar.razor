@@ -1,0 +1,543 @@
+@page "/calendar"
+@using LifeOS.Application.UseCases.Calendar
+@inject CalendarService CalendarSvc
+@inject IUserTimeZone TimeZone
+@inject IDateTimeFormatter Dates
+
+<PageTitle>تقویم — Life OS</PageTitle>
+
+<PageHeader Eyebrow="امروز" Title="تقویم"
+            Description="رویدادها بر اساس تاریخ محلی شما گروه‌بندی می‌شوند، نه UTC؛ بنابراین یک رویداد شب‌هنگام در روز اشتباه ظاهر نمی‌شود.">
+    <Actions>
+        <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+<div class="row row--wrap mb-3">
+    <button class="btn @TabClass("agenda")" @onclick="@(() => SetTab("agenda"))">دستور کار</button>
+    <button class="btn @TabClass("commitments")" @onclick="@(() => SetTab("commitments"))">تعهدات</button>
+</div>
+
+@if (_tab == "agenda")
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">دستور کار</span>
+                <div class="card__actions">
+                    <button class="btn btn--sm btn--ghost" @onclick="@(() => ShiftWeekAsync(-7))" disabled="@_busy">هفته قبل</button>
+                    <button class="btn btn--sm btn--ghost" @onclick="GoTodayAsync" disabled="@_busy">امروز</button>
+                    <button class="btn btn--sm btn--ghost" @onclick="@(() => ShiftWeekAsync(7))" disabled="@_busy">هفته بعد</button>
+                </div>
+            </div>
+            <div class="card__body">
+                <div class="text-muted text-sm">
+                    @Dates.FormatDateLong(_fromDate) تا @Dates.FormatDateLong(_toDate)
+                </div>
+            </div>
+
+            @if (_agenda.Count == 0)
+            {
+                <EmptyState Title="رویدادی در این بازه نیست" Description="بازه را تغییر دهید یا رویداد جدید بسازید." />
+            }
+            else
+            {
+                <div class="list">
+                    @foreach (var day in _agenda)
+                    {
+                        <div class="list__item">
+                            <div class="list__main">
+                                <div class="list__title">
+                                    @Dates.FormatDayName(day.Date) — @Dates.FormatDate(day.Date)
+                                    @if (day.Date == TimeZone.TodayLocal)
+                                    {
+                                        <span class="badge badge--accent">امروز</span>
+                                    }
+                                </div>
+
+                                @if (day.Events.Count == 0 && day.Commitments.Count == 0)
+                                {
+                                    <div class="list__meta">—</div>
+                                }
+
+                                @foreach (var e in day.Events)
+                                {
+                                    <div class="row row--between mt-2">
+                                        <div>
+                                            <span class="text-muted nums">@Dates.FormatTime(e.StartAtUtc)</span>
+                                            <span class="ml-2">@e.Title</span>
+                                            @if (!string.IsNullOrWhiteSpace(e.Location))
+                                            {
+                                                <span class="text-faint text-sm"> · @e.Location</span>
+                                            }
+                                        </div>
+                                        <div class="row">
+                                            <span class="chip">@EventTypeLabel(e.EventType)</span>
+                                            <button class="btn btn--sm btn--ghost" @onclick="() => DeleteEventAsync(e.Id)" disabled="@_busy">حذف</button>
+                                        </div>
+                                    </div>
+                                }
+
+                                @foreach (var c in day.Commitments)
+                                {
+                                    <div class="row row--between mt-2">
+                                        <div>
+                                            <span class="badge badge--info">تعهد</span>
+                                            <span class="ml-2">@c.Title</span>
+                                        </div>
+                                        <span class="chip">@ImportanceLabel(c.Importance)</span>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">رویداد جدید</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">عنوان</label>
+                    <input class="input" @bind="_newEventTitle" />
+                </div>
+                <div class="field">
+                    <label class="field__label">نوع</label>
+                    <select class="select" @bind="_newEventType">
+                        @foreach (var t in Enum.GetValues<CalendarEventType>())
+                        {
+                            <option value="@t">@EventTypeLabel(t)</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">تاریخ</label>
+                        <input class="input" type="date" @bind="_newEventDate" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">محل</label>
+                        <input class="input" @bind="_newEventLocation" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">از ساعت</label>
+                        <input class="input" type="time" @bind="_newEventStart" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">تا ساعت</label>
+                        <input class="input" type="time" @bind="_newEventEnd" />
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="field__label">توضیح</label>
+                    <textarea class="textarea" rows="3" @bind="_newEventDescription"></textarea>
+                </div>
+                <button class="btn btn--primary btn--block" @onclick="CreateEventAsync" disabled="@_busy">ثبت رویداد</button>
+            </div>
+        </section>
+    </div>
+}
+else
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">تعهدات</span>
+                <div class="card__actions">
+                    <label class="checkbox">
+                        <input type="checkbox" @bind="_includeClosed" @bind:after="ReloadCommitmentsAsync" />
+                        شامل بسته‌شده‌ها
+                    </label>
+                </div>
+            </div>
+
+            @if (_commitments.Count == 0)
+            {
+                <EmptyState Title="تعهدی ثبت نشده" Description="قرارها و مسئولیت‌ها را در فرم کنار ثبت کنید." />
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>عنوان</th>
+                                <th>نوع</th>
+                                <th>سررسید</th>
+                                <th>اهمیت</th>
+                                <th>وضعیت</th>
+                                <th class="actions">عملیات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var c in _commitments)
+                            {
+                                <tr>
+                                    <td>@c.Title</td>
+                                    <td class="text-muted">@CommitmentTypeLabel(c.CommitmentType)</td>
+                                    <td class="@(c.IsOverdue ? "text-danger" : "text-muted")">
+                                        @(c.DueDate.HasValue ? Dates.FormatDate(c.DueDate.Value) : "—")
+                                    </td>
+                                    <td><span class="chip">@ImportanceLabel(c.Importance)</span></td>
+                                    <td><span class="badge @CommitmentClass(c.Status)">@CommitmentLabel(c.Status)</span></td>
+                                    <td class="actions">
+                                        @if (c.Status == CommitmentStatus.Active || c.Status == CommitmentStatus.Overdue)
+                                        {
+                                            <button class="btn btn--sm" @onclick="() => CompleteCommitmentAsync(c.Id)" disabled="@_busy">انجام شد</button>
+                                        }
+                                        <button class="btn btn--sm btn--ghost" @onclick="() => DeleteCommitmentAsync(c.Id)" disabled="@_busy">حذف</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">تعهد جدید</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">عنوان</label>
+                    <input class="input" @bind="_newCommitmentTitle" />
+                </div>
+                <div class="field">
+                    <label class="field__label">نوع</label>
+                    <select class="select" @bind="_newCommitmentType">
+                        @foreach (var t in Enum.GetValues<CommitmentType>())
+                        {
+                            <option value="@t">@CommitmentTypeLabel(t)</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">سررسید</label>
+                        <input class="input" type="date" @bind="_newCommitmentDue" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">اهمیت</label>
+                        <select class="select" @bind="_newCommitmentImportance">
+                            @foreach (var i in Enum.GetValues<ImportanceLevel>())
+                            {
+                                <option value="@i">@ImportanceLabel(i)</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="field__label">توضیح</label>
+                    <textarea class="textarea" rows="3" @bind="_newCommitmentDescription"></textarea>
+                </div>
+                <button class="btn btn--primary btn--block" @onclick="CreateCommitmentAsync" disabled="@_busy">ثبت تعهد</button>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<AgendaDay> _agenda = [];
+    private IReadOnlyList<CommitmentItemView> _commitments = [];
+
+    private bool _busy;
+    private string _tab = "agenda";
+    private string? _error;
+    private string? _notice;
+
+    private DateOnly _fromDate;
+    private DateOnly _toDate;
+
+    private bool _includeClosed;
+
+    private string _newEventTitle = string.Empty;
+    private CalendarEventType _newEventType = CalendarEventType.Appointment;
+    private DateTime? _newEventDate;
+    private string _newEventLocation = string.Empty;
+    private TimeOnly _newEventStart = new(9, 0);
+    private TimeOnly _newEventEnd = new(10, 0);
+    private string _newEventDescription = string.Empty;
+
+    private string _newCommitmentTitle = string.Empty;
+    private CommitmentType _newCommitmentType = CommitmentType.Appointment;
+    private DateTime? _newCommitmentDue;
+    private ImportanceLevel _newCommitmentImportance = ImportanceLevel.Medium;
+    private string _newCommitmentDescription = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var today = TimeZone.TodayLocal;
+        _fromDate = today;
+        _toDate = today.AddDays(6);
+        _newEventDate = DateTime.Today;
+        _newCommitmentDue = DateTime.Today;
+
+        await ReloadAsync();
+    }
+
+    private void SetTab(string tab) => _tab = tab;
+
+    private string TabClass(string tab) => _tab == tab ? "btn--primary" : "btn--ghost";
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _agenda = await CalendarSvc.GetAgendaAsync(_fromDate, _toDate);
+            await ReloadCommitmentsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReloadCommitmentsAsync()
+    {
+        try
+        {
+            _commitments = await CalendarSvc.ListCommitmentsAsync(_includeClosed);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task ShiftWeekAsync(int days)
+    {
+        _fromDate = _fromDate.AddDays(days);
+        _toDate = _toDate.AddDays(days);
+        await ReloadAsync();
+    }
+
+    private async Task GoTodayAsync()
+    {
+        var today = TimeZone.TodayLocal;
+        _fromDate = today;
+        _toDate = today.AddDays(6);
+        await ReloadAsync();
+    }
+
+    private async Task CreateEventAsync()
+    {
+        if (!_newEventDate.HasValue)
+        {
+            _error = "تاریخ رویداد را انتخاب کنید.";
+            return;
+        }
+
+        if (_newEventEnd <= _newEventStart)
+        {
+            _error = "ساعت پایان باید بعد از شروع باشد.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var date = DateOnly.FromDateTime(_newEventDate.Value);
+            var request = new CreateCalendarEventRequest(
+                _newEventTitle,
+                string.IsNullOrWhiteSpace(_newEventDescription) ? null : _newEventDescription,
+                TimeZone.ToUtc(date, _newEventStart),
+                TimeZone.ToUtc(date, _newEventEnd),
+                _newEventType,
+                string.IsNullOrWhiteSpace(_newEventLocation) ? null : _newEventLocation,
+                false,
+                null,
+                null);
+
+            var result = await CalendarSvc.CreateEventAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "رویداد ثبت شد.";
+            _newEventTitle = string.Empty;
+            _newEventDescription = string.Empty;
+            _newEventLocation = string.Empty;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteEventAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await CalendarSvc.DeleteEventAsync(id);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateCommitmentAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateCommitmentRequest(
+                _newCommitmentTitle,
+                string.IsNullOrWhiteSpace(_newCommitmentDescription) ? null : _newCommitmentDescription,
+                _newCommitmentType,
+                _newCommitmentDue.HasValue ? DateOnly.FromDateTime(_newCommitmentDue.Value) : null,
+                _newCommitmentImportance,
+                null,
+                null);
+
+            var result = await CalendarSvc.CreateCommitmentAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "تعهد ثبت شد.";
+            _newCommitmentTitle = string.Empty;
+            _newCommitmentDescription = string.Empty;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CompleteCommitmentAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await CalendarSvc.ChangeCommitmentStatusAsync(id, CommitmentStatus.Completed);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteCommitmentAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await CalendarSvc.DeleteCommitmentAsync(id);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string EventTypeLabel(CalendarEventType type) => type switch
+    {
+        CalendarEventType.Appointment => "قرار",
+        CalendarEventType.Meeting => "جلسه",
+        CalendarEventType.Personal => "شخصی",
+        CalendarEventType.Deadline => "مهلت",
+        CalendarEventType.Reminder => "یادآور",
+        _ => "سایر"
+    };
+
+    private static string CommitmentTypeLabel(CommitmentType type) => type switch
+    {
+        CommitmentType.Appointment => "قرار",
+        CommitmentType.Responsibility => "مسئولیت",
+        CommitmentType.ImportantDate => "تاریخ مهم",
+        CommitmentType.FinancialDueDate => "سررسید مالی",
+        CommitmentType.Work => "کاری",
+        CommitmentType.Household => "خانه",
+        _ => "سایر"
+    };
+
+    private static string ImportanceLabel(ImportanceLevel level) => level switch
+    {
+        ImportanceLevel.Low => "کم",
+        ImportanceLevel.Medium => "متوسط",
+        ImportanceLevel.High => "زیاد",
+        ImportanceLevel.Critical => "بحرانی",
+        _ => level.ToString()
+    };
+
+    private static string CommitmentLabel(CommitmentStatus status) => status switch
+    {
+        CommitmentStatus.Active => "فعال",
+        CommitmentStatus.Paid => "پرداخت‌شده",
+        CommitmentStatus.Overdue => "سررسید گذشته",
+        CommitmentStatus.Cancelled => "لغو‌شده",
+        CommitmentStatus.Completed => "تکمیل‌شده",
+        _ => status.ToString()
+    };
+
+    private static string CommitmentClass(CommitmentStatus status) => status switch
+    {
+        CommitmentStatus.Completed => "badge--ok",
+        CommitmentStatus.Paid => "badge--ok",
+        CommitmentStatus.Overdue => "badge--danger",
+        CommitmentStatus.Cancelled => "badge--warn",
+        _ => "badge--info"
+    };
+}

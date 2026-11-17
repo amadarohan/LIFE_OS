@@ -1,0 +1,832 @@
+@page "/finance"
+@using LifeOS.Application.UseCases.Finance
+@inject FinanceService FinanceSvc
+@inject IMoneyFormatter Money
+@inject INumberFormatter Numbers
+@inject IDateTimeFormatter Dates
+
+<PageTitle>مالی — Life OS</PageTitle>
+
+<PageHeader Eyebrow="منابع" Title="مالی"
+            Description="موجودی همیشه از تراکنش‌ها به‌علاوه موجودی اولیه محاسبه می‌شود؛ هیچ عددی به‌صورت دستی نگه‌داری نمی‌شود.">
+    <Actions>
+        <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+@if (_overview is not null)
+{
+    <div class="grid grid--4 mb-4">
+        <div class="metric metric--accent">
+            <span class="metric__label">موجودی کل</span>
+            <span class="metric__value">@Money.FormatCompact(_overview.TotalBalance, "IRR")</span>
+            <span class="metric__hint">@Numbers.Format(_overview.Accounts.Count) حساب</span>
+        </div>
+        <div class="metric metric--ok">
+            <span class="metric__label">درآمد ماه</span>
+            <span class="metric__value">@Money.FormatCompact(_overview.MonthIncome, "IRR")</span>
+        </div>
+        <div class="metric metric--danger">
+            <span class="metric__label">هزینه ماه</span>
+            <span class="metric__value">@Money.FormatCompact(_overview.MonthExpense, "IRR")</span>
+        </div>
+        <div class="metric @(_overview.OverdueCommitmentCount > 0 ? "metric--warn" : "metric--info")">
+            <span class="metric__label">تعهدات آینده</span>
+            <span class="metric__value">@Money.FormatCompact(_overview.UpcomingCommitmentsAmount, "IRR")</span>
+            <span class="metric__hint">@Numbers.Format(_overview.OverdueCommitmentCount) سررسید گذشته</span>
+        </div>
+    </div>
+}
+
+<div class="row row--wrap mb-3">
+    <button class="btn @TabClass("accounts")" @onclick="@(() => SetTab("accounts"))">حساب‌ها</button>
+    <button class="btn @TabClass("transactions")" @onclick="@(() => SetTab("transactions"))">تراکنش‌ها</button>
+    <button class="btn @TabClass("commitments")" @onclick="@(() => SetTab("commitments"))">تعهدات</button>
+    <button class="btn @TabClass("budgets")" @onclick="@(() => SetTab("budgets"))">بودجه‌ها</button>
+</div>
+
+@if (_tab == "accounts")
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">حساب‌ها</span>
+                <span class="card__subtitle">@_accounts.Count حساب</span>
+            </div>
+
+            @if (_accounts.Count == 0)
+            {
+                <EmptyState Title="حسابی ثبت نشده" Description="اولین حساب خود را در فرم کنار بسازید." />
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>نام</th>
+                                <th>نوع</th>
+                                <th class="num">موجودی</th>
+                                <th>وضعیت</th>
+                                <th class="actions">عملیات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var a in _accounts)
+                            {
+                                <tr>
+                                    <td>@a.Name</td>
+                                    <td class="text-muted">@AccountTypeLabel(a.AccountType)</td>
+                                    <td class="num">@Money.Format(a.CurrentBalance, a.CurrencyCode)</td>
+                                    <td>
+                                        <span class="badge @(a.IsActive ? "badge--ok" : "badge--warn")">
+                                            @(a.IsActive ? "فعال" : "غیرفعال")
+                                        </span>
+                                    </td>
+                                    <td class="actions">
+                                        <button class="btn btn--sm btn--ghost" @onclick="() => ToggleAccountAsync(a.Id, a.IsActive)" disabled="@_busy">
+                                            @(a.IsActive ? "غیرفعال" : "فعال")
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">حساب جدید</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">نام</label>
+                    <input class="input" @bind="_newAccountName" />
+                </div>
+                <div class="field">
+                    <label class="field__label">نوع</label>
+                    <select class="select" @bind="_newAccountType">
+                        @foreach (var t in Enum.GetValues<AccountType>())
+                        {
+                            <option value="@t">@AccountTypeLabel(t)</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">واحد پول</label>
+                        <input class="input" @bind="_newAccountCurrency" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">موجودی اولیه</label>
+                        <input class="input" type="number" step="0.01" @bind="_newAccountBalance" />
+                    </div>
+                </div>
+                <button class="btn btn--primary btn--block" @onclick="CreateAccountAsync" disabled="@_busy">ثبت حساب</button>
+            </div>
+        </section>
+    </div>
+}
+else if (_tab == "transactions")
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">تراکنش‌ها</span>
+                <div class="card__actions">
+                    <label class="checkbox">
+                        <input type="checkbox" @bind="_includeForecast" @bind:after="ReloadTransactionsAsync" />
+                        شامل پیش‌بینی
+                    </label>
+                </div>
+            </div>
+
+            @if (_transactions.Count == 0)
+            {
+                <EmptyState Title="تراکنشی ثبت نشده" Description="اولین تراکنش را در فرم کنار ثبت کنید." />
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>تاریخ</th>
+                                <th>حساب</th>
+                                <th>نوع</th>
+                                <th>دسته</th>
+                                <th class="num">مبلغ</th>
+                                <th class="actions">عملیات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _transactions)
+                            {
+                                <tr>
+                                    <td class="text-muted">@Dates.FormatDate(t.TransactionDate)</td>
+                                    <td>@t.AccountName</td>
+                                    <td class="text-muted">@TransactionTypeLabel(t.TransactionType)</td>
+                                    <td class="text-muted">@(t.Category ?? "—")</td>
+                                    <td class="num @(t.SignedAmount < 0 ? "text-danger" : "text-ok")">
+                                        @Money.Format(t.SignedAmount, t.CurrencyCode)
+                                    </td>
+                                    <td class="actions">
+                                        <button class="btn btn--sm btn--ghost" @onclick="() => DeleteTransactionAsync(t.Id)" disabled="@_busy">
+                                            حذف
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">تراکنش جدید</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">حساب</label>
+                    <select class="select" @bind="_newTxAccountId">
+                        <option value="">— انتخاب حساب —</option>
+                        @foreach (var a in _accounts)
+                        {
+                            <option value="@a.Id">@a.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label class="field__label">نوع</label>
+                    <select class="select" @bind="_newTxType">
+                        @foreach (var t in Enum.GetValues<TransactionType>())
+                        {
+                            <option value="@t">@TransactionTypeLabel(t)</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">مبلغ</label>
+                        <input class="input" type="number" step="0.01" @bind="_newTxAmount" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">تاریخ</label>
+                        <input class="input" type="date" @bind="_newTxDate" />
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="field__label">دسته</label>
+                    <input class="input" @bind="_newTxCategory" />
+                </div>
+                <div class="field">
+                    <label class="field__label">توضیح</label>
+                    <input class="input" @bind="_newTxDescription" />
+                </div>
+                <label class="checkbox mb-3">
+                    <input type="checkbox" @bind="_newTxForecast" />
+                    پیش‌بینی (هنوز رخ نداده)
+                </label>
+                <button class="btn btn--primary btn--block" @onclick="CreateTransactionAsync" disabled="@_busy">ثبت تراکنش</button>
+            </div>
+        </section>
+    </div>
+}
+else if (_tab == "commitments")
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">تعهدات مالی</span>
+                <span class="card__subtitle">@_commitments.Count مورد</span>
+            </div>
+
+            @if (_commitments.Count == 0)
+            {
+                <EmptyState Title="تعهدی ثبت نشده" Description="اقساط و بدهی‌ها را در فرم کنار ثبت کنید." />
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>نام</th>
+                                <th class="num">باقی‌مانده</th>
+                                <th class="num">اقساط</th>
+                                <th>سررسید بعدی</th>
+                                <th>وضعیت</th>
+                                <th class="actions">عملیات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var c in _commitments)
+                            {
+                                <tr>
+                                    <td>@c.Name</td>
+                                    <td class="num">@Money.Format(c.RemainingAmount, c.CurrencyCode)</td>
+                                    <td class="num text-muted">@c.PaidInstallments / @c.InstallmentCount</td>
+                                    <td class="@(c.IsOverdue ? "text-danger" : "text-muted")">
+                                        @(c.NextDueDate.HasValue ? Dates.FormatDate(c.NextDueDate.Value) : "—")
+                                    </td>
+                                    <td><span class="badge @CommitmentClass(c.Status)">@CommitmentLabel(c.Status)</span></td>
+                                    <td class="actions">
+                                        @if (c.Status == CommitmentStatus.Active || c.Status == CommitmentStatus.Overdue)
+                                        {
+                                            <button class="btn btn--sm" @onclick="() => PayCommitmentAsync(c.Id)" disabled="@_busy">
+                                                ثبت پرداخت
+                                            </button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">تعهد جدید</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">نام</label>
+                    <input class="input" @bind="_newCommitmentName" />
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">مبلغ کل</label>
+                        <input class="input" type="number" step="0.01" @bind="_newCommitmentTotal" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">واحد پول</label>
+                        <input class="input" @bind="_newCommitmentCurrency" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">مبلغ هر قسط</label>
+                        <input class="input" type="number" step="0.01" @bind="_newCommitmentInstallment" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">تعداد اقساط</label>
+                        <input class="input" type="number" min="1" @bind="_newCommitmentCount" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">سررسید بعدی</label>
+                        <input class="input" type="date" @bind="_newCommitmentDue" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">تناوب</label>
+                        <select class="select" @bind="_newCommitmentFrequency">
+                            @foreach (var f in Enum.GetValues<RecurrenceFrequency>())
+                            {
+                                <option value="@f">@FrequencyLabel(f)</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn--primary btn--block" @onclick="CreateCommitmentAsync" disabled="@_busy">ثبت تعهد</button>
+            </div>
+        </section>
+    </div>
+}
+else
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">بودجه‌ها</span>
+                <span class="card__subtitle">@_budgets.Count مورد</span>
+            </div>
+
+            @if (_budgets.Count == 0)
+            {
+                <EmptyState Title="بودجه‌ای ثبت نشده" Description="برای هر دسته هزینه یک بودجه تعریف کنید." />
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>نام</th>
+                                <th>دسته</th>
+                                <th class="num">مبلغ</th>
+                                <th class="num">مصرف</th>
+                                <th>بهره‌برداری</th>
+                                <th class="actions">عملیات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var b in _budgets)
+                            {
+                                <tr>
+                                    <td>@b.Name</td>
+                                    <td class="text-muted">@b.Category</td>
+                                    <td class="num">@Money.Format(b.Amount, b.CurrencyCode)</td>
+                                    <td class="num">@Money.Format(b.SpentAmount, b.CurrencyCode)</td>
+                                    <td style="min-width: 140px">
+                                        <ProgressBar Value="b.UtilizationPercent"
+                                                     Tone="@(b.IsOverBudget ? "danger" : "ok")"
+                                                     ValueLabel="@Numbers.FormatPercent(b.UtilizationPercent, 0)" />
+                                    </td>
+                                    <td class="actions">
+                                        <button class="btn btn--sm btn--ghost" @onclick="() => DeleteBudgetAsync(b.Id)" disabled="@_busy">
+                                            حذف
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">بودجه جدید</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">نام</label>
+                    <input class="input" @bind="_newBudgetName" />
+                </div>
+                <div class="field">
+                    <label class="field__label">دسته</label>
+                    <input class="input" @bind="_newBudgetCategory" />
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">مبلغ</label>
+                        <input class="input" type="number" step="0.01" @bind="_newBudgetAmount" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">واحد پول</label>
+                        <input class="input" @bind="_newBudgetCurrency" />
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="field__label">دوره</label>
+                    <select class="select" @bind="_newBudgetPeriod">
+                        @foreach (var p in Enum.GetValues<BudgetPeriodType>())
+                        {
+                            <option value="@p">@PeriodLabel(p)</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="field">
+                        <label class="field__label">از تاریخ</label>
+                        <input class="input" type="date" @bind="_newBudgetStart" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">تا تاریخ</label>
+                        <input class="input" type="date" @bind="_newBudgetEnd" />
+                    </div>
+                </div>
+                <button class="btn btn--primary btn--block" @onclick="CreateBudgetAsync" disabled="@_busy">ثبت بودجه</button>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    private FinanceOverview? _overview;
+    private IReadOnlyList<AccountView> _accounts = [];
+    private IReadOnlyList<TransactionView> _transactions = [];
+    private IReadOnlyList<CommitmentView> _commitments = [];
+    private IReadOnlyList<BudgetView> _budgets = [];
+
+    private bool _busy;
+    private string _tab = "accounts";
+    private string? _error;
+    private string? _notice;
+
+    private bool _includeForecast;
+
+    private string _newAccountName = string.Empty;
+    private AccountType _newAccountType = AccountType.Bank;
+    private string _newAccountCurrency = "IRR";
+    private decimal _newAccountBalance;
+
+    private string _newTxAccountId = string.Empty;
+    private TransactionType _newTxType = TransactionType.Expense;
+    private decimal _newTxAmount;
+    private DateTime? _newTxDate = DateTime.Today;
+    private string _newTxCategory = string.Empty;
+    private string _newTxDescription = string.Empty;
+    private bool _newTxForecast;
+
+    private string _newCommitmentName = string.Empty;
+    private decimal _newCommitmentTotal;
+    private string _newCommitmentCurrency = "IRR";
+    private decimal _newCommitmentInstallment;
+    private int _newCommitmentCount = 1;
+    private DateTime? _newCommitmentDue;
+    private RecurrenceFrequency _newCommitmentFrequency = RecurrenceFrequency.Monthly;
+
+    private string _newBudgetName = string.Empty;
+    private string _newBudgetCategory = string.Empty;
+    private decimal _newBudgetAmount;
+    private string _newBudgetCurrency = "IRR";
+    private BudgetPeriodType _newBudgetPeriod = BudgetPeriodType.Monthly;
+    private DateTime? _newBudgetStart = DateTime.Today;
+    private DateTime? _newBudgetEnd = DateTime.Today.AddMonths(1);
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private void SetTab(string tab) => _tab = tab;
+
+    private string TabClass(string tab) => _tab == tab ? "btn--primary" : "btn--ghost";
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _overview = await FinanceSvc.GetOverviewAsync();
+            _accounts = await FinanceSvc.ListAccountsAsync(includeInactive: true);
+            _commitments = await FinanceSvc.ListCommitmentsAsync();
+            _budgets = await FinanceSvc.ListBudgetsAsync();
+            await ReloadTransactionsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReloadTransactionsAsync()
+    {
+        try
+        {
+            _transactions = await FinanceSvc.ListTransactionsAsync(
+                new TransactionFilter(IncludeForecast: _includeForecast));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task CreateAccountAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateAccountRequest(
+                _newAccountName,
+                _newAccountType,
+                _newAccountCurrency,
+                _newAccountBalance,
+                null);
+
+            var result = await FinanceSvc.CreateAccountAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "حساب ثبت شد.";
+            _newAccountName = string.Empty;
+            _newAccountBalance = 0m;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleAccountAsync(Guid id, bool current)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await FinanceSvc.SetAccountActiveAsync(id, !current);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateTransactionAsync()
+    {
+        if (!Guid.TryParse(_newTxAccountId, out var accountId))
+        {
+            _error = "یک حساب انتخاب کنید.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateTransactionRequest(
+                accountId,
+                _newTxType,
+                _newTxAmount,
+                string.IsNullOrWhiteSpace(_newTxCategory) ? null : _newTxCategory,
+                string.IsNullOrWhiteSpace(_newTxDescription) ? null : _newTxDescription,
+                _newTxDate.HasValue ? DateOnly.FromDateTime(_newTxDate.Value) : DateOnly.FromDateTime(DateTime.Today),
+                _newTxForecast,
+                null);
+
+            var result = await FinanceSvc.RecordTransactionAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "تراکنش ثبت شد.";
+            _newTxAmount = 0m;
+            _newTxCategory = string.Empty;
+            _newTxDescription = string.Empty;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteTransactionAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await FinanceSvc.DeleteTransactionAsync(id);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateCommitmentAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateCommitmentRequest(
+                _newCommitmentName,
+                null,
+                _newCommitmentTotal,
+                _newCommitmentCurrency,
+                _newCommitmentInstallment,
+                _newCommitmentCount,
+                _newCommitmentDue.HasValue ? DateOnly.FromDateTime(_newCommitmentDue.Value) : null,
+                _newCommitmentFrequency,
+                null);
+
+            var result = await FinanceSvc.CreateCommitmentAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "تعهد ثبت شد.";
+            _newCommitmentName = string.Empty;
+            _newCommitmentTotal = 0m;
+            _newCommitmentInstallment = 0m;
+            _newCommitmentCount = 1;
+            _newCommitmentDue = null;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task PayCommitmentAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await FinanceSvc.RegisterCommitmentPaymentAsync(id, DateOnly.FromDateTime(DateTime.Today));
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "پرداخت ثبت شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateBudgetAsync()
+    {
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new CreateBudgetRequest(
+                _newBudgetName,
+                _newBudgetCategory,
+                _newBudgetAmount,
+                _newBudgetCurrency,
+                _newBudgetPeriod,
+                _newBudgetStart.HasValue ? DateOnly.FromDateTime(_newBudgetStart.Value) : DateOnly.FromDateTime(DateTime.Today),
+                _newBudgetEnd.HasValue ? DateOnly.FromDateTime(_newBudgetEnd.Value) : DateOnly.FromDateTime(DateTime.Today.AddMonths(1)));
+
+            var result = await FinanceSvc.CreateBudgetAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "بودجه ثبت شد.";
+            _newBudgetName = string.Empty;
+            _newBudgetCategory = string.Empty;
+            _newBudgetAmount = 0m;
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteBudgetAsync(Guid id)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await FinanceSvc.DeleteBudgetAsync(id);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string AccountTypeLabel(AccountType type) => type switch
+    {
+        AccountType.Cash => "نقدی",
+        AccountType.Bank => "بانکی",
+        AccountType.Savings => "پس‌انداز",
+        AccountType.Credit => "اعتباری",
+        AccountType.Investment => "سرمایه‌گذاری",
+        _ => "سایر"
+    };
+
+    private static string TransactionTypeLabel(TransactionType type) => type switch
+    {
+        TransactionType.Income => "درآمد",
+        TransactionType.Expense => "هزینه",
+        TransactionType.Transfer => "انتقال",
+        TransactionType.Adjustment => "تعدیل",
+        _ => type.ToString()
+    };
+
+    private static string CommitmentLabel(CommitmentStatus status) => status switch
+    {
+        CommitmentStatus.Active => "فعال",
+        CommitmentStatus.Paid => "پرداخت‌شده",
+        CommitmentStatus.Overdue => "سررسید گذشته",
+        CommitmentStatus.Cancelled => "لغو‌شده",
+        CommitmentStatus.Completed => "تکمیل‌شده",
+        _ => status.ToString()
+    };
+
+    private static string CommitmentClass(CommitmentStatus status) => status switch
+    {
+        CommitmentStatus.Paid => "badge--ok",
+        CommitmentStatus.Completed => "badge--ok",
+        CommitmentStatus.Overdue => "badge--danger",
+        CommitmentStatus.Cancelled => "badge--warn",
+        _ => "badge--info"
+    };
+
+    private static string FrequencyLabel(RecurrenceFrequency frequency) => frequency switch
+    {
+        RecurrenceFrequency.Daily => "روزانه",
+        RecurrenceFrequency.Weekly => "هفتگی",
+        RecurrenceFrequency.Monthly => "ماهانه",
+        RecurrenceFrequency.Quarterly => "فصلی",
+        RecurrenceFrequency.Yearly => "سالانه",
+        _ => frequency.ToString()
+    };
+
+    private static string PeriodLabel(BudgetPeriodType period) => period switch
+    {
+        BudgetPeriodType.Weekly => "هفتگی",
+        BudgetPeriodType.Monthly => "ماهانه",
+        BudgetPeriodType.Quarterly => "فصلی",
+        BudgetPeriodType.Yearly => "سالانه",
+        BudgetPeriodType.Custom => "سفارشی",
+        _ => period.ToString()
+    };
+}

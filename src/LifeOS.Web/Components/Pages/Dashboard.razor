@@ -1,0 +1,383 @@
+@page "/"
+@using LifeOS.Application.UseCases.Analytics
+@using LifeOS.Application.UseCases.Tasks
+@inject AnalyticsService Analytics
+@inject TaskService Tasks
+@inject IUserTimeZone TimeZone
+@inject IDateTimeFormatter Dates
+@inject INumberFormatter Numbers
+@inject NavigationManager Navigation
+
+<PageTitle>داشبورد — Life OS</PageTitle>
+
+<PageHeader Eyebrow="مرکز فرمان"
+            Title="داشبورد"
+            Description="تصویر امروز: ظرفیت، کارهای بعدی، و بدهی‌های زندگی که منتظر تصمیم شما هستند.">
+    <Actions>
+        <button class="btn btn--primary" @onclick="RefreshAsync" disabled="@_loading">
+            @(_loading ? "در حال بارگذاری…" : "به‌روزرسانی")
+        </button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+
+@if (_snapshot is null)
+{
+    <div class="grid grid--4">
+        @for (var i = 0; i < 4; i++)
+        {
+            <div class="metric">
+                <div class="skeleton" style="width: 40%"></div>
+                <div class="skeleton mt-2" style="width: 65%; height: 24px"></div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    var s = _snapshot;
+
+    <div class="grid grid--4 mb-4">
+        <div class="metric metric--accent">
+            <span class="metric__label">کارهای باز</span>
+            <span class="metric__value">@Numbers.Format(s.OpenTaskCount)</span>
+            <span class="metric__hint">@Numbers.Format(s.InboxCount) مورد در صندوق ورودی</span>
+        </div>
+        <div class="metric @(s.OverdueTaskCount > 0 ? "metric--danger" : "metric--ok")">
+            <span class="metric__label">عقب‌افتاده</span>
+            <span class="metric__value">@Numbers.Format(s.OverdueTaskCount)</span>
+            <span class="metric__hint">@Numbers.Format(s.CompletedTodayCount) کار امروز تمام شد</span>
+        </div>
+        <div class="metric metric--info">
+            <span class="metric__label">ظرفیت امروز</span>
+            <span class="metric__value">@Numbers.FormatPercent(s.Capacity.UtilizationPercent)</span>
+            <span class="metric__hint">
+                @Numbers.FormatMinutes(s.Capacity.PlannedMinutes) از @Numbers.FormatMinutes(s.Capacity.UsableMinutes)
+            </span>
+        </div>
+        <div class="metric @(s.LifeDebt.IsEmpty ? "metric--ok" : "metric--warn")">
+            <span class="metric__label">بدهی زندگی</span>
+            <span class="metric__value">@Numbers.Format(s.LifeDebt.TotalCount)</span>
+            <span class="metric__hint">@Numbers.Format(s.DueCommitmentCount) تعهد سررسیدشده</span>
+        </div>
+    </div>
+
+    <div class="grid grid--sidebar">
+        <div class="stack">
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">کارهای بعدی</span>
+                    <span class="card__subtitle">بر اساس امتیاز اولویت</span>
+                    <div class="card__actions">
+                        <a class="btn btn--sm btn--ghost" href="tasks">همه کارها</a>
+                    </div>
+                </div>
+
+                @if (s.NextActions.Count == 0)
+                {
+                    <EmptyState Title="کاری در صف نیست"
+                                Description="با ثبت یک کار جدید یا فعال کردن «اقدام بعدی» روی یک کار موجود شروع کنید.">
+                        <Action>
+                            <a class="btn btn--sm" href="tasks">رفتن به کارها</a>
+                        </Action>
+                    </EmptyState>
+                }
+                else
+                {
+                    <div class="list">
+                        @foreach (var task in s.NextActions)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@task.Title</div>
+                                    <div class="list__meta">
+                                        @if (!string.IsNullOrWhiteSpace(task.ProjectName))
+                                        {
+                                            <span>@task.ProjectName</span>
+                                        }
+                                        @if (task.DueDate.HasValue)
+                                        {
+                                            <span class="@(task.IsOverdue ? "text-danger" : string.Empty)">
+                                                @Dates.FormatDate(task.DueDate.Value)
+                                            </span>
+                                        }
+                                        <span>@PriorityLabel(task.Priority)</span>
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    <span class="badge @BandClass(task.Band)">@Numbers.Format(task.PriorityScore, 0)</span>
+                                    <button class="btn btn--sm" @onclick="() => CompleteAsync(task.Id)">
+                                        انجام شد
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">پروژه‌هایی که توجه می‌خواهند</span>
+                    <div class="card__actions">
+                        <a class="btn btn--sm btn--ghost" href="projects">همه پروژه‌ها</a>
+                    </div>
+                </div>
+
+                @if (s.ProjectsNeedingAttention.Count == 0)
+                {
+                    <EmptyState Title="همه پروژه‌ها در وضعیت سالم هستند" />
+                }
+                else
+                {
+                    <div class="list">
+                        @foreach (var project in s.ProjectsNeedingAttention)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@project.Name</div>
+                                    <div class="list__meta">
+                                        <span>@HealthLabel(project.Health)</span>
+                                        <span>@project.Recommendation</span>
+                                    </div>
+                                </div>
+                                <div class="list__aside" style="min-width: 120px">
+                                    <ProgressBar Value="project.ProgressPercentage"
+                                                 Tone="@HealthTone(project.Health)"
+                                                 ValueLabel="@Numbers.FormatPercent(project.ProgressPercentage, 0)" />
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+        </div>
+
+        <div class="stack">
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">بدهی زندگی</span>
+                    <span class="card__subtitle">@Numbers.Format(s.LifeDebt.TotalCount) مورد</span>
+                </div>
+
+                @if (s.LifeDebt.IsEmpty)
+                {
+                    <EmptyState Title="چیزی معوق نمانده" Description="هیچ کار، تعهد یا تصمیمی از موعد خود عبور نکرده است." />
+                }
+                else
+                {
+                    <div class="list">
+                        @foreach (var item in s.LifeDebt.MostUrgent(6))
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@item.Title</div>
+                                    <div class="list__meta">
+                                        <span>@DebtKindLabel(item.Kind)</span>
+                                        <span>@Numbers.Format(item.AgeDays) روز</span>
+                                    </div>
+                                </div>
+                                <div class="list__aside">
+                                    <span class="badge @SeverityClass(item.Severity)">@SeverityLabel(item.Severity)</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">اهداف در معرض خطر</span>
+                    <div class="card__actions">
+                        <a class="btn btn--sm btn--ghost" href="goals">اهداف</a>
+                    </div>
+                </div>
+
+                @if (s.GoalsAtRisk.Count == 0)
+                {
+                    <EmptyState Title="هیچ هدفی از مسیر خارج نشده" />
+                }
+                else
+                {
+                    <div class="list">
+                        @foreach (var goal in s.GoalsAtRisk)
+                        {
+                            <div class="list__item">
+                                <div class="list__main">
+                                    <div class="list__title">@goal.Name</div>
+                                    <div class="list__meta">
+                                        @if (goal.TargetDate.HasValue)
+                                        {
+                                            <span class="@(goal.IsOverdue ? "text-danger" : string.Empty)">
+                                                هدف: @Dates.FormatDate(goal.TargetDate.Value)
+                                            </span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="list__aside" style="min-width: 110px">
+                                    <ProgressBar Value="goal.ProgressPercentage"
+                                                 Tone="@(goal.IsOverdue ? "danger" : "warn")"
+                                                 ValueLabel="@Numbers.FormatPercent(goal.ProgressPercentage, 0)" />
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+
+            <section class="card">
+                <div class="card__header">
+                    <span class="card__title">ظرفیت امروز</span>
+                </div>
+                <div class="card__body">
+                    <div class="row row--between mb-2">
+                        <span class="text-sm text-muted">برنامه‌ریزی‌شده</span>
+                        <span class="text-sm nums">@Numbers.FormatMinutes(s.Capacity.PlannedMinutes)</span>
+                    </div>
+                    <ProgressBar Value="s.Capacity.UtilizationPercent"
+                                 Tone="@CapacityTone(s.Capacity.Status)"
+                                 ValueLabel="@Numbers.FormatPercent(s.Capacity.UtilizationPercent, 0)" />
+                    <div class="row row--between mt-3">
+                        <span class="text-sm text-muted">باقی‌مانده</span>
+                        <span class="text-sm nums">@Numbers.FormatMinutes(s.Capacity.RemainingMinutes)</span>
+                    </div>
+                    <div class="row row--between mt-2">
+                        <span class="text-sm text-muted">قابل استفاده (با بافر)</span>
+                        <span class="text-sm nums">@Numbers.FormatMinutes(s.Capacity.UsableMinutes)</span>
+                    </div>
+                    <div class="mt-3">
+                        <span class="badge @CapacityClass(s.Capacity.Status)">@CapacityLabel(s.Capacity.Status)</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+}
+
+@code {
+    private DashboardSnapshot? _snapshot;
+    private bool _loading;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task RefreshAsync()
+    {
+        _loading = true;
+        _error = null;
+
+        try
+        {
+            _snapshot = await Analytics.GetDashboardAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task CompleteAsync(Guid taskId)
+    {
+        var result = await Tasks.ChangeStatusAsync(taskId, LifeTaskStatus.Completed);
+        if (result.IsFailure)
+        {
+            _error = result.ErrorMessage;
+            return;
+        }
+
+        await RefreshAsync();
+    }
+
+    private static string PriorityLabel(PriorityLevel priority) => priority switch
+    {
+        PriorityLevel.Critical => "بحرانی",
+        PriorityLevel.High => "بالا",
+        PriorityLevel.Medium => "متوسط",
+        PriorityLevel.Low => "پایین",
+        _ => "بدون اولویت"
+    };
+
+    private static string BandClass(PriorityBand band) => band switch
+    {
+        PriorityBand.Critical => "badge--danger",
+        PriorityBand.High => "badge--warn",
+        PriorityBand.Medium => "badge--info",
+        _ => string.Empty
+    };
+
+    private static string HealthLabel(ProjectHealth health) => health switch
+    {
+        ProjectHealth.Stagnant => "راکد",
+        ProjectHealth.AtRisk => "در خطر",
+        ProjectHealth.Watch => "نیازمند توجه",
+        _ => "سالم"
+    };
+
+    private static string HealthTone(ProjectHealth health) => health switch
+    {
+        ProjectHealth.Stagnant => "danger",
+        ProjectHealth.AtRisk => "danger",
+        ProjectHealth.Watch => "warn",
+        _ => "ok"
+    };
+
+    private static string DebtKindLabel(LifeDebtKind kind) => kind switch
+    {
+        LifeDebtKind.OverdueTask => "کار عقب‌افتاده",
+        LifeDebtKind.ForgottenCommitment => "تعهد فراموش‌شده",
+        LifeDebtKind.StagnantProject => "پروژه راکد",
+        LifeDebtKind.UnreviewedDecision => "تصمیم بازبینی‌نشده",
+        LifeDebtKind.UnfinishedPlan => "برنامه ناتمام",
+        LifeDebtKind.FinancialObligation => "تعهد مالی",
+        _ => "سایر"
+    };
+
+    private static string SeverityLabel(ImportanceLevel level) => level switch
+    {
+        ImportanceLevel.Critical => "بحرانی",
+        ImportanceLevel.High => "بالا",
+        ImportanceLevel.Medium => "متوسط",
+        _ => "پایین"
+    };
+
+    private static string SeverityClass(ImportanceLevel level) => level switch
+    {
+        ImportanceLevel.Critical => "badge--danger",
+        ImportanceLevel.High => "badge--warn",
+        ImportanceLevel.Medium => "badge--info",
+        _ => string.Empty
+    };
+
+    private static string CapacityLabel(CapacityStatus status) => status switch
+    {
+        CapacityStatus.Overloaded => "بیش از ظرفیت",
+        CapacityStatus.NearCapacity => "نزدیک ظرفیت",
+        CapacityStatus.Healthy => "متعادل",
+        _ => "خالی"
+    };
+
+    private static string CapacityClass(CapacityStatus status) => status switch
+    {
+        CapacityStatus.Overloaded => "badge--danger",
+        CapacityStatus.NearCapacity => "badge--warn",
+        CapacityStatus.Healthy => "badge--ok",
+        _ => string.Empty
+    };
+
+    private static string CapacityTone(CapacityStatus status) => status switch
+    {
+        CapacityStatus.Overloaded => "danger",
+        CapacityStatus.NearCapacity => "warn",
+        CapacityStatus.Healthy => "ok",
+        _ => "accent"
+    };
+}

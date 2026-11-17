@@ -1,0 +1,601 @@
+@page "/planning"
+@using LifeOS.Application.UseCases.Planning
+@using LifeOS.Application.Engines
+@inject PlanningService PlanningSvc
+@inject IUserTimeZone TimeZone
+@inject IDateTimeFormatter Dates
+@inject INumberFormatter Numbers
+
+<PageTitle>برنامه‌ریزی — Life OS</PageTitle>
+
+<PageHeader Eyebrow="امروز" Title="برنامه‌ریزی"
+            Description="هفته از شنبه شروع می‌شود. همه اعداد ظرفیت از موتور ظرفیت می‌آید، نه محاسبه موردی در رابط کاربری.">
+    <Actions>
+        <button class="btn" @onclick="ReloadAsync" disabled="@_busy">به‌روزرسانی</button>
+    </Actions>
+</PageHeader>
+
+@if (_error is not null)
+{
+    <AlertBanner Kind="danger" Title="خطا" Message="@_error" />
+}
+@if (_notice is not null)
+{
+    <AlertBanner Kind="ok" Message="@_notice" />
+}
+
+@if (_plan is null)
+{
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <EmptyState Title="برنامه‌ای برای این هفته ثبت نشده"
+                        Description="برای شروع، برنامه هفته جاری را بسازید." />
+        </section>
+
+        <section class="card">
+            <div class="card__header"><span class="card__title">برنامه هفته جدید</span></div>
+            <div class="card__body">
+                <div class="field">
+                    <label class="field__label">شروع هفته</label>
+                    <input class="input" type="date" @bind="_newWeekStart" />
+                </div>
+                <div class="field">
+                    <label class="field__label">ساعت در دسترس</label>
+                    <input class="input" type="number" step="0.5" @bind="_newWeekHours" />
+                </div>
+                <div class="field">
+                    <label class="field__label">تم هفته</label>
+                    <input class="input" @bind="_newWeekTheme" placeholder="مثلاً: تمرکز روی پروژه اصلی" />
+                </div>
+                <button class="btn btn--primary btn--block" @onclick="CreateWeekAsync" disabled="@_busy">ساخت برنامه</button>
+            </div>
+        </section>
+    </div>
+}
+else
+{
+    <div class="grid grid--4 mb-4">
+        <div class="metric metric--accent">
+            <span class="metric__label">ساعت در دسترس</span>
+            <span class="metric__value">@Numbers.Format(_plan.AvailableHours, 1)</span>
+            <span class="metric__hint">@Dates.FormatDate(_plan.WeekStartDate) تا @Dates.FormatDate(_plan.WeekEndDate)</span>
+        </div>
+        <div class="metric metric--info">
+            <span class="metric__label">ساعت برنامه‌ریزی‌شده</span>
+            <span class="metric__value">@Numbers.Format(_plan.PlannedHours, 1)</span>
+        </div>
+        <div class="metric @(_plan.IsOverloaded ? "metric--danger" : "metric--ok")">
+            <span class="metric__label">اضافه‌بار</span>
+            <span class="metric__value">@Numbers.Format(_plan.OverloadHours, 1)</span>
+            <span class="metric__hint">@(_plan.IsOverloaded ? "هفته بیش‌بار است" : "در محدوده ظرفیت")</span>
+        </div>
+        <div class="metric metric--warn">
+            <span class="metric__label">وضعیت</span>
+            <span class="metric__value">@PlanStatusLabel(_plan.Status)</span>
+            <span class="metric__hint">@(_plan.Theme ?? "بدون تم")</span>
+        </div>
+    </div>
+
+    <div class="grid grid--sidebar">
+        <section class="card">
+            <div class="card__header">
+                <span class="card__title">روزهای هفته</span>
+                <span class="card__subtitle">@_plan.DailyPlans.Count روز</span>
+            </div>
+
+            @if (_plan.DailyPlans.Count == 0)
+            {
+                <EmptyState Title="روزی برنامه‌ریزی نشده" Description="از فرم کنار یک روز اضافه کنید." />
+            }
+            else
+            {
+                <div class="list">
+                    @foreach (var day in _plan.DailyPlans)
+                    {
+                        <div class="list__item">
+                            <div class="list__main">
+                                <div class="list__title">
+                                    @Dates.FormatDayName(day.PlanDate) — @Dates.FormatDate(day.PlanDate)
+                                    <span class="badge @CapacityClass(day.Capacity.Status)">@CapacityLabel(day.Capacity.Status)</span>
+                                </div>
+                                <div class="list__meta">@(day.MainFocus ?? "بدون تمرکز مشخص")</div>
+
+                                <div class="progress-row mt-2">
+                                    <ProgressBar Value="day.Capacity.UtilizationPercent"
+                                                 Tone="@CapacityTone(day.Capacity.Status)"
+                                                 ValueLabel="@Numbers.FormatPercent(day.Capacity.UtilizationPercent, 0)" />
+                                </div>
+                                <div class="text-faint text-sm mt-1">
+                                    برنامه‌ریزی‌شده @Numbers.FormatMinutes(day.PlannedMinutes) از @Numbers.FormatMinutes(day.Capacity.UsableMinutes) قابل استفاده
+                                </div>
+
+                                @foreach (var block in day.TimeBlocks)
+                                {
+                                    <div class="row row--between mt-2">
+                                        <div>
+                                            <span class="text-muted nums">@Dates.FormatTime(block.StartAtUtc) – @Dates.FormatTime(block.EndAtUtc)</span>
+                                            <span class="ml-2">@block.Title</span>
+                                            <span class="chip ml-2">@BlockTypeLabel(block.BlockType)</span>
+                                        </div>
+                                        <div class="row">
+                                            <span class="badge @BlockStatusClass(block.Status)">@BlockStatusLabel(block.Status)</span>
+                                            @if (block.Status == TimeBlockStatus.Planned)
+                                            {
+                                                <button class="btn btn--sm" @onclick="@(() => ChangeBlockStatusAsync(day.Id, block.Id, TimeBlockStatus.Done))" disabled="@_busy">انجام شد</button>
+                                            }
+                                            <button class="btn btn--sm btn--ghost" @onclick="@(() => RemoveBlockAsync(day.Id, block.Id))" disabled="@_busy">حذف</button>
+                                        </div>
+                                    </div>
+                                }
+
+                                <div class="row row--wrap mt-3">
+                                    <input class="input" style="max-width: 220px" placeholder="عنوان بلوک" @bind="_blockTitles[day.Id]" />
+                                    <input class="input" style="max-width: 110px" type="time" @bind="_blockStarts[day.Id]" />
+                                    <input class="input" style="max-width: 110px" type="time" @bind="_blockEnds[day.Id]" />
+                                    <select class="select" style="max-width: 130px" @bind="_blockTypes[day.Id]">
+                                        @foreach (var t in Enum.GetValues<TimeBlockType>())
+                                        {
+                                            <option value="@t">@BlockTypeLabel(t)</option>
+                                        }
+                                    </select>
+                                    <button class="btn btn--sm btn--primary" @onclick="@(() => AddBlockAsync(day))" disabled="@_busy">افزودن</button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <div class="stack">
+            <section class="card">
+                <div class="card__header"><span class="card__title">افزودن روز</span></div>
+                <div class="card__body">
+                    <div class="field">
+                        <label class="field__label">تاریخ</label>
+                        <input class="input" type="date" @bind="_newDayDate" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">تمرکز اصلی</label>
+                        <input class="input" @bind="_newDayFocus" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">دقیقه در دسترس</label>
+                        <input class="input" type="number" min="0" step="30" @bind="_newDayMinutes" />
+                    </div>
+                    <button class="btn btn--primary btn--block" @onclick="AddDayAsync" disabled="@_busy">افزودن روز</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card__header"><span class="card__title">تنظیمات هفته</span></div>
+                <div class="card__body">
+                    <div class="field">
+                        <label class="field__label">تم</label>
+                        <input class="input" @bind="_editTheme" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">ساعت در دسترس</label>
+                        <input class="input" type="number" step="0.5" @bind="_editHours" />
+                    </div>
+                    <div class="field">
+                        <label class="field__label">وضعیت</label>
+                        <select class="select" @bind="_editStatus">
+                            @foreach (var s in Enum.GetValues<PlanStatus>())
+                            {
+                                <option value="@s">@PlanStatusLabel(s)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="row row--wrap">
+                        <button class="btn btn--primary" @onclick="SaveWeekAsync" disabled="@_busy">ذخیره</button>
+                        <button class="btn btn--ghost" @onclick="ChangeStatusAsync" disabled="@_busy">تغییر وضعیت</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card__header"><span class="card__title">بازنگری هفته</span></div>
+                <div class="card__body">
+                    <div class="field">
+                        <label class="field__label">یادداشت بازنگری</label>
+                        <textarea class="textarea" rows="5" @bind="_editReflection"></textarea>
+                    </div>
+                    <button class="btn btn--block" @onclick="SaveReflectionAsync" disabled="@_busy">ذخیره بازنگری</button>
+                </div>
+            </section>
+        </div>
+    </div>
+}
+
+@code {
+    private WeeklyPlanView? _plan;
+
+    private bool _busy;
+    private string? _error;
+    private string? _notice;
+
+    private DateTime? _newWeekStart;
+    private decimal _newWeekHours = 40m;
+    private string _newWeekTheme = string.Empty;
+
+    private DateTime? _newDayDate;
+    private string _newDayFocus = string.Empty;
+    private int _newDayMinutes = 480;
+
+    private string _editTheme = string.Empty;
+    private decimal _editHours;
+    private PlanStatus _editStatus = PlanStatus.Draft;
+    private string _editReflection = string.Empty;
+
+    private readonly Dictionary<Guid, string> _blockTitles = [];
+    private readonly Dictionary<Guid, TimeOnly> _blockStarts = [];
+    private readonly Dictionary<Guid, TimeOnly> _blockEnds = [];
+    private readonly Dictionary<Guid, TimeBlockType> _blockTypes = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var today = TimeZone.TodayLocal;
+        _newWeekStart = DateTime.Today;
+        _newDayDate = DateTime.Today;
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await PlanningSvc.GetCurrentWeekAsync();
+            if (result.IsFailure || result.Value is null)
+            {
+                _plan = null;
+                return;
+            }
+
+            _plan = result.Value;
+            _editTheme = result.Value.Theme ?? string.Empty;
+            _editHours = result.Value.AvailableHours;
+            _editStatus = result.Value.Status;
+            _editReflection = result.Value.Reflection ?? string.Empty;
+
+            foreach (var day in result.Value.DailyPlans)
+            {
+                _blockTitles.TryAdd(day.Id, string.Empty);
+                _blockStarts.TryAdd(day.Id, new TimeOnly(9, 0));
+                _blockEnds.TryAdd(day.Id, new TimeOnly(10, 0));
+                _blockTypes.TryAdd(day.Id, TimeBlockType.Focus);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateWeekAsync()
+    {
+        if (!_newWeekStart.HasValue)
+        {
+            _error = "تاریخ شروع هفته را انتخاب کنید.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var start = PlanningService.StartOfWeek(DateOnly.FromDateTime(_newWeekStart.Value));
+            var request = new CreateWeeklyPlanRequest(start, string.IsNullOrWhiteSpace(_newWeekTheme) ? null : _newWeekTheme, _newWeekHours);
+
+            var result = await PlanningSvc.CreateAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "برنامه هفته ساخته شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AddDayAsync()
+    {
+        if (_plan is null || !_newDayDate.HasValue)
+        {
+            _error = "تاریخ روز را انتخاب کنید.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await PlanningSvc.AddDailyPlanAsync(
+                _plan.Id,
+                DateOnly.FromDateTime(_newDayDate.Value),
+                string.IsNullOrWhiteSpace(_newDayFocus) ? null : _newDayFocus,
+                _newDayMinutes);
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "روز اضافه شد.";
+            _newDayFocus = string.Empty;
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AddBlockAsync(DailyPlanView day)
+    {
+        var title = _blockTitles.GetValueOrDefault(day.Id, string.Empty);
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            _error = "عنوان بلوک را وارد کنید.";
+            return;
+        }
+
+        var start = _blockStarts.GetValueOrDefault(day.Id, new TimeOnly(9, 0));
+        var end = _blockEnds.GetValueOrDefault(day.Id, new TimeOnly(10, 0));
+
+        if (end <= start)
+        {
+            _error = "ساعت پایان باید بعد از شروع باشد.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var request = new AddTimeBlockRequest(
+                day.Id,
+                title,
+                TimeZone.ToUtc(day.PlanDate, start),
+                TimeZone.ToUtc(day.PlanDate, end),
+                _blockTypes.GetValueOrDefault(day.Id, TimeBlockType.Focus),
+                null,
+                null,
+                null);
+
+            var result = await PlanningSvc.AddTimeBlockAsync(request);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "بلوک زمانی اضافه شد.";
+            _blockTitles[day.Id] = string.Empty;
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ChangeBlockStatusAsync(Guid dailyPlanId, Guid blockId, TimeBlockStatus status)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await PlanningSvc.ChangeTimeBlockStatusAsync(dailyPlanId, blockId, status);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RemoveBlockAsync(Guid dailyPlanId, Guid blockId)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var result = await PlanningSvc.RemoveTimeBlockAsync(dailyPlanId, blockId);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveWeekAsync()
+    {
+        if (_plan is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await PlanningSvc.UpdateAsync(
+                _plan.Id,
+                string.IsNullOrWhiteSpace(_editTheme) ? null : _editTheme,
+                _editHours);
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "برنامه هفته ذخیره شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ChangeStatusAsync()
+    {
+        if (_plan is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await PlanningSvc.ChangeStatusAsync(_plan.Id, _editStatus);
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "وضعیت تغییر کرد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveReflectionAsync()
+    {
+        if (_plan is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await PlanningSvc.SetReflectionAsync(
+                _plan.Id,
+                string.IsNullOrWhiteSpace(_editReflection) ? null : _editReflection);
+
+            if (result.IsFailure)
+            {
+                _error = result.ErrorMessage;
+                return;
+            }
+
+            _notice = "بازنگری ذخیره شد.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string PlanStatusLabel(PlanStatus status) => status switch
+    {
+        PlanStatus.Draft => "پیش‌نویس",
+        PlanStatus.Active => "فعال",
+        PlanStatus.Completed => "تکمیل‌شده",
+        PlanStatus.Reviewed => "بازبینی‌شده",
+        _ => status.ToString()
+    };
+
+    private static string BlockTypeLabel(TimeBlockType type) => type switch
+    {
+        TimeBlockType.Focus => "تمرکز",
+        TimeBlockType.Meeting => "جلسه",
+        TimeBlockType.Personal => "شخصی",
+        TimeBlockType.Break => "استراحت",
+        TimeBlockType.Buffer => "حائل",
+        TimeBlockType.Admin => "اداری",
+        _ => type.ToString()
+    };
+
+    private static string BlockStatusLabel(TimeBlockStatus status) => status switch
+    {
+        TimeBlockStatus.Planned => "برنامه‌ریزی‌شده",
+        TimeBlockStatus.InProgress => "در جریان",
+        TimeBlockStatus.Done => "انجام‌شده",
+        TimeBlockStatus.Skipped => "رد‌شده",
+        _ => status.ToString()
+    };
+
+    private static string BlockStatusClass(TimeBlockStatus status) => status switch
+    {
+        TimeBlockStatus.Done => "badge--ok",
+        TimeBlockStatus.InProgress => "badge--info",
+        TimeBlockStatus.Skipped => "badge--warn",
+        _ => "badge--accent"
+    };
+
+    private static string CapacityLabel(CapacityStatus status) => status switch
+    {
+        CapacityStatus.Empty => "خالی",
+        CapacityStatus.Healthy => "سالم",
+        CapacityStatus.NearCapacity => "نزدیک ظرفیت",
+        CapacityStatus.Overloaded => "بیش‌بار",
+        _ => status.ToString()
+    };
+
+    private static string CapacityClass(CapacityStatus status) => status switch
+    {
+        CapacityStatus.Healthy => "badge--ok",
+        CapacityStatus.NearCapacity => "badge--warn",
+        CapacityStatus.Overloaded => "badge--danger",
+        _ => "badge--info"
+    };
+
+    private static string CapacityTone(CapacityStatus status) => status switch
+    {
+        CapacityStatus.Healthy => "ok",
+        CapacityStatus.NearCapacity => "warn",
+        CapacityStatus.Overloaded => "danger",
+        _ => "accent"
+    };
+}

@@ -1,0 +1,117 @@
+﻿@inherits LayoutComponentBase
+
+<div class="app-shell">
+    <aside class="app-sidebar">
+        <div class="app-brand">
+            <div class="app-brand__mark">OS</div>
+            <div class="app-brand__text">
+                <span class="app-brand__title">سیستم عامل زندگی</span>
+                <span class="app-brand__subtitle">مرکز فرمان</span>
+            </div>
+        </div>
+
+        <nav class="app-nav">
+            <div class="app-nav__group-label">امروز</div>
+            <NavLink class="app-nav__link" href="" Match="NavLinkMatch.All">
+                <span class="app-nav__icon">◈</span>
+                <span>داشبورد</span>
+            </NavLink>
+            <NavLink class="app-nav__link" href="tasks">
+                <span class="app-nav__icon">✓</span>
+                <span>کارها</span>
+            </NavLink>
+            <NavLink class="app-nav__link" href="calendar">
+                <span class="app-nav__icon">▤</span>
+                <span>تقویم</span>
+            </NavLink>
+            <NavLink class="app-nav__link" href="planning">
+                <span class="app-nav__icon">▦</span>
+                <span>برنامه‌ریزی</span>
+            </NavLink>
+
+            <div class="app-nav__group-label">جهت‌گیری</div>
+            <NavLink class="app-nav__link" href="goals">
+                <span class="app-nav__icon">◎</span>
+                <span>اهداف</span>
+            </NavLink>
+            <NavLink class="app-nav__link" href="projects">
+                <span class="app-nav__icon">▣</span>
+                <span>پروژه‌ها</span>
+            </NavLink>
+            <NavLink class="app-nav__link" href="domains">
+                <span class="app-nav__icon">◇</span>
+                <span>حوزه‌های زندگی</span>
+            </NavLink>
+            <NavLink class="app-nav__link" href="decisions">
+                <span class="app-nav__icon">⇄</span>
+                <span>تصمیم‌ها</span>
+            </NavLink>
+
+            <div class="app-nav__group-label">منابع</div>
+            <NavLink class="app-nav__link" href="finance">
+                <span class="app-nav__icon">₪</span>
+                <span>مالی</span>
+            </NavLink>
+            <NavLink class="app-nav__link" href="knowledge">
+                <span class="app-nav__icon">✎</span>
+                <span>دانش</span>
+            </NavLink>
+
+            <div class="app-nav__group-label">هوش</div>
+            <NavLink class="app-nav__link" href="assistant">
+                <span class="app-nav__icon">✦</span>
+                <span>دستیار</span>
+            </NavLink>
+
+            <div class="app-nav__group-label">سیستم</div>
+            <NavLink class="app-nav__link" href="settings">
+                <span class="app-nav__icon">⚙</span>
+                <span>تنظیمات</span>
+            </NavLink>
+            <NavLink class="app-nav__link" href="backup">
+                <span class="app-nav__icon">⛁</span>
+                <span>پشتیبان‌گیری</span>
+            </NavLink>
+        </nav>
+
+        <div class="app-sidebar__footer">
+            نسخه ۰.۱ — فاز پیاده‌سازی
+        </div>
+    </aside>
+
+    <div class="app-main">
+        <header class="app-topbar">
+            <span class="app-topbar__title">Life OS</span>
+            <span class="app-topbar__meta">@TodayLabel</span>
+            <span class="app-topbar__spacer"></span>
+            <span class="app-topbar__meta">@ClockLabel</span>
+        </header>
+
+        <main class="app-content">
+            @Body
+        </main>
+    </div>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    خطایی رخ داد.
+    <a href="." class="reload">بارگذاری مجدد</a>
+    <span class="dismiss">✕</span>
+</div>
+
+@code {
+    [Inject] private IClock Clock { get; set; } = default!;
+    [Inject] private IUserTimeZone TimeZone { get; set; } = default!;
+    [Inject] private IDateTimeFormatter DateFormatter { get; set; } = default!;
+
+    private string TodayLabel
+    {
+        get
+        {
+            var today = TimeZone.ToLocalDate(Clock.UtcNow);
+            return $"{DateFormatter.FormatDayName(today)} — {DateFormatter.FormatDateLong(today)}";
+        }
+    }
+
+    private string ClockLabel => DateFormatter.FormatTime(Clock.UtcNow);
+}
